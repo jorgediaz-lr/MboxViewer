@@ -1,0 +1,386 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #f5f5f7;
+    color: #1d1d1f;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    color: #1d1d1f;
+    margin-bottom: 10px;
+}
+
+header p {
+    color: #86868b;
+    font-size: 1.1rem;
+}
+
+.file-input-section {
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+#mboxFile {
+    display: none;
+}
+
+.file-label {
+    display: inline-block;
+    background: #007aff;
+    color: white;
+    padding: 12px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.file-label:hover {
+    background: #0056cc;
+}
+
+.file-info {
+    margin-top: 15px;
+    color: #86868b;
+    font-size: 0.9rem;
+}
+
+.search-section {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+#searchInput {
+    flex: 1;
+    padding: 12px 16px;
+    border: 2px solid #e5e5e7;
+    border-radius: 8px;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#searchInput:focus {
+    border-color: #007aff;
+}
+
+#searchBtn, #clearBtn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#searchBtn {
+    background: #007aff;
+    color: white;
+}
+
+#searchBtn:hover {
+    background: #0056cc;
+}
+
+#clearBtn {
+    background: #e5e5e7;
+    color: #1d1d1f;
+}
+
+#clearBtn:hover {
+    background: #d1d1d6;
+}
+
+.main-content {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 20px;
+    margin-bottom: 20px;
+    min-height: 600px;
+}
+
+.email-list, .email-viewer {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+}
+
+.email-list {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.email-item {
+    padding: 16px 20px;
+    border-bottom: 1px solid #e5e5e7;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.email-item:hover {
+    background-color: #f9f9f9;
+}
+
+.email-item.selected {
+    background-color: #e3f2fd;
+    border-left: 4px solid #007aff;
+}
+
+.email-item:last-child {
+    border-bottom: none;
+}
+
+.email-from {
+    font-weight: 600;
+    color: #1d1d1f;
+    margin-bottom: 4px;
+}
+
+.email-subject {
+    color: #1d1d1f;
+    margin-bottom: 4px;
+    font-size: 0.95rem;
+}
+
+.email-date {
+    color: #86868b;
+    font-size: 0.85rem;
+}
+
+.email-viewer {
+    padding: 0;
+    overflow-y: auto;
+}
+
+.email-header {
+    padding: 20px;
+    border-bottom: 1px solid #e5e5e7;
+    background-color: #f9f9f9;
+}
+
+.email-content {
+    padding: 20px;
+    white-space: pre-wrap;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.no-file-message, .no-email-selected {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #86868b;
+    font-size: 1.1rem;
+    padding: 40px;
+    text-align: center;
+}
+
+.stats {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    color: #86868b;
+}
+
+.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    color: #007aff;
+    font-size: 1.1rem;
+}
+
+.error {
+    color: #ff3b30;
+    background-color: #fff2f2;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 10px 0;
+    border: 1px solid #ff3b30;
+}
+
+.load-more-btn {
+    padding: 15px 20px;
+    background: #f0f0f0;
+    text-align: center;
+    cursor: pointer;
+    border-top: 1px solid #e5e5e7;
+    color: #007aff;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.load-more-btn:hover {
+    background: #e5e5e7;
+}
+
+.chunk-navigation {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px 20px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e5e5e7;
+    font-weight: 500;
+}
+
+.chunk-navigation button {
+    padding: 8px 16px;
+    border: 1px solid #007aff;
+    background: #007aff;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.2s;
+}
+
+.chunk-navigation button:hover:not(:disabled) {
+    background: #0056cc;
+}
+
+.chunk-navigation button:disabled {
+    background: #ccc;
+    border-color: #ccc;
+    cursor: not-allowed;
+}
+
+#chunkInfo {
+    font-weight: 600;
+    color: #1d1d1f;
+}
+
+.email-labels {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.gmail-label {
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid #bbdefb;
+}
+
+.gmail-label-detail {
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border: 1px solid #bbdefb;
+    margin-right: 6px;
+    display: inline-block;
+}
+
+.search-progress {
+    padding: 20px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e5e5e7;
+}
+
+.search-header {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #1d1d1f;
+    margin-bottom: 10px;
+}
+
+.search-status {
+    color: #666;
+    margin-bottom: 15px;
+}
+
+#cancelSearch {
+    background: #ff3b30;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+#cancelSearch:hover {
+    background: #d12b20;
+}
+
+.search-result {
+    position: relative;
+    border-left: 3px solid #007aff;
+}
+
+.search-result-header {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+}
+
+.chunk-indicator {
+    background: #007aff;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.search-result:hover {
+    background-color: #f0f8ff;
+}
+
+@media (max-width: 768px) {
+    .main-content {
+        grid-template-columns: 1fr;
+        grid-template-rows: 300px 1fr;
+    }
+    
+    .search-section {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    #searchInput {
+        width: 100%;
+    }
+}

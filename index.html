@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mbox File Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📧 Mbox File Viewer</h1>
+            <p>View your Gmail exports and other mbox files</p>
+        </header>
+
+        <div class="file-input-section">
+            <input type="file" id="mboxFile" accept=".mbox,.txt" />
+            <label for="mboxFile" class="file-label">Choose Mbox File</label>
+            <div class="file-info" id="fileInfo"></div>
+        </div>
+
+        <div class="search-section">
+            <input type="text" id="searchInput" placeholder="Search emails..." />
+            <button id="searchBtn">Search</button>
+            <button id="clearBtn">Clear</button>
+        </div>
+
+        <div class="main-content">
+            <div class="email-list" id="emailList">
+                <div class="no-file-message">
+                    Select an mbox file to view your emails
+                </div>
+            </div>
+
+            <div class="email-viewer" id="emailViewer">
+                <div class="no-email-selected">
+                    Select an email from the list to view its content
+                </div>
+            </div>
+        </div>
+
+        <div class="stats" id="stats"></div>
+    </div>
+
+    <script src="script-simple.js"></script>
+</body>
+</html>
