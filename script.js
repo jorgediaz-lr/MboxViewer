@@ -35,57 +35,32 @@ MboxParser.prototype.parseMboxFile = function(content) {
 };
 
 MboxParser.prototype.parseEmail = function(rawEmail) {
-    var lines = rawEmail.split('\n');
+    // Normalize line endings once, then split the message into its header block
+    // and body at the first blank line (after the mbox "From " envelope line).
+    var normalized = rawEmail.replace(/\r\n/g, '\n');
+    var headerStart = (normalized.indexOf('From ') === 0) ? normalized.indexOf('\n') + 1 : 0;
+    var blankLine = normalized.indexOf('\n\n', headerStart);
+
+    var headerBlock, rawBody;
+    if (blankLine === -1) {
+        headerBlock = normalized.substring(headerStart);
+        rawBody = '';
+    } else {
+        headerBlock = normalized.substring(headerStart, blankLine);
+        rawBody = normalized.substring(blankLine + 2).replace(/^\s+/, '');
+    }
+
     var email = {
         from: '',
         to: '',
         subject: '',
         date: '',
         messageId: '',
-        body: '',
         bodyText: '',
         bodyHtml: '',
         attachments: [],
-        headers: {},
-        raw: rawEmail
+        headers: this.parseHeaders(headerBlock)
     };
-
-    var headerMode = true;
-    var bodyLines = [];
-    var lastHeader = null;
-
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].replace(/\r$/, '');
-
-        if (headerMode) {
-            // Skip the mbox "From " envelope line that precedes the real headers
-            if (i === 0 && line.indexOf('From ') === 0) {
-                continue;
-            }
-
-            // A blank line ends the header block
-            if (line === '') {
-                headerMode = false;
-                continue;
-            }
-
-            // Folded continuation lines (leading whitespace) belong to the previous header
-            if ((line.charAt(0) === ' ' || line.charAt(0) === '\t') && lastHeader !== null) {
-                email.headers[lastHeader] += ' ' + line.replace(/^\s+/, '');
-                continue;
-            }
-
-            var colonIndex = line.indexOf(':');
-            if (colonIndex > 0) {
-                var header = line.substring(0, colonIndex).toLowerCase();
-                var value = line.substring(colonIndex + 1).replace(/^\s+/, '');
-                email.headers[header] = value;
-                lastHeader = header;
-            }
-        } else {
-            bodyLines.push(line);
-        }
-    }
 
     // Resolve convenience fields from the fully-unfolded headers
     var h = email.headers;
@@ -117,8 +92,9 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         email.gmailThreadId = h['x-gmail-thread-id'];
     }
 
-    // Walk the MIME tree to populate bodyText, bodyHtml and attachments
-    var rawBody = bodyLines.join('\n').replace(/^\s+/, '');
+    // Walk the MIME tree to populate bodyText, bodyHtml and attachments. The
+    // searchable plain-text projection (email.body) is built lazily on first
+    // search via getSearchText, since most emails are never searched.
     this.processMimePart(
         email,
         h['content-type'] || 'text/plain',
@@ -126,19 +102,6 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         h['content-disposition'] || '',
         rawBody
     );
-
-    // Plain-text projection used for search and as a display fallback. Combine
-    // the text part and the stripped HTML so a search term present in either is
-    // matched (e.g. HTML-only marketing mail with a token plain-text part).
-    var searchParts = [];
-    if (email.bodyText) {
-        searchParts.push(email.bodyText);
-    }
-    var htmlText = this.stripHtml(email.bodyHtml);
-    if (htmlText) {
-        searchParts.push(htmlText);
-    }
-    email.body = searchParts.join('\n');
 
     return email;
 };
@@ -271,7 +234,7 @@ MboxParser.prototype.parseMimePartString = function(email, partString) {
         partBody = partString.substring(separator + 2);
     }
 
-    var headers = this.parsePartHeaders(headerBlock);
+    var headers = this.parseHeaders(headerBlock);
     this.processMimePart(
         email,
         headers['content-type'] || 'text/plain',
@@ -281,7 +244,9 @@ MboxParser.prototype.parseMimePartString = function(email, partString) {
     );
 };
 
-MboxParser.prototype.parsePartHeaders = function(headerBlock) {
+// Parse an RFC 822 header block (newline-normalized) into a lowercased-name map,
+// merging folded continuation lines. Shared by the message and its MIME parts.
+MboxParser.prototype.parseHeaders = function(headerBlock) {
     var headers = {};
     if (!headerBlock) return headers;
 
@@ -289,7 +254,7 @@ MboxParser.prototype.parsePartHeaders = function(headerBlock) {
     var lastHeader = null;
 
     for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].replace(/\r$/, '');
+        var line = lines[i];
 
         if ((line.charAt(0) === ' ' || line.charAt(0) === '\t') && lastHeader !== null) {
             headers[lastHeader] += ' ' + line.replace(/^\s+/, '');
@@ -335,15 +300,38 @@ MboxParser.prototype.splitMimeParts = function(body, boundary) {
 MboxParser.prototype.getMimeParameter = function(headerValue, paramName) {
     if (!headerValue) return '';
 
-    var quoted = new RegExp(paramName + '\\s*=\\s*"([^"]*)"', 'i');
-    var match = headerValue.match(quoted);
-    if (match) return match[1];
+    // Match param="quoted value" or param=bare-value in a single pass; cache the
+    // compiled regex per parameter name (a tiny fixed set: boundary/filename/name).
+    var cache = this._paramRegexCache || (this._paramRegexCache = {});
+    var re = cache[paramName] ||
+        (cache[paramName] = new RegExp(paramName + '\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n\\s]+))', 'i'));
 
-    var unquoted = new RegExp(paramName + '\\s*=\\s*([^;\\r\\n\\s]+)', 'i');
-    match = headerValue.match(unquoted);
-    if (match) return match[1];
+    var match = headerValue.match(re);
+    if (!match) return '';
+    return match[1] !== undefined ? match[1] : match[2];
+};
 
-    return '';
+// --- Transfer-encoding primitives (shared by the text and byte decode paths) ---
+
+MboxParser.prototype.cleanBase64 = function(data) {
+    return data.replace(/[^A-Za-z0-9+/=]/g, '');
+};
+
+// Quoted-printable -> raw byte string: drop soft line breaks, turn =XX into a byte.
+MboxParser.prototype.decodeQuotedPrintable = function(content) {
+    return content
+        .replace(/=\r?\n/g, '')
+        .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
+            return String.fromCharCode(parseInt(hex, 16));
+        });
+};
+
+MboxParser.prototype.stringToBytes = function(binary) {
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i) & 0xff;
+    }
+    return bytes;
 };
 
 MboxParser.prototype.decodeTransferEncoding = function(content, encoding) {
@@ -354,12 +342,7 @@ MboxParser.prototype.decodeTransferEncoding = function(content, encoding) {
     }
 
     if (encoding.indexOf('quoted-printable') !== -1) {
-        var qp = content
-            .replace(/=\r?\n/g, '')
-            .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
-                return String.fromCharCode(parseInt(hex, 16));
-            });
-        return this.decodeUtf8(qp);
+        return this.decodeUtf8(this.decodeQuotedPrintable(content));
     }
 
     // 7bit / 8bit / binary: FileReader already decoded the bytes as UTF-8
@@ -368,20 +351,34 @@ MboxParser.prototype.decodeTransferEncoding = function(content, encoding) {
 
 MboxParser.prototype.decodeBase64Text = function(data) {
     try {
-        var clean = data.replace(/[^A-Za-z0-9+/=]/g, '');
-        return this.decodeUtf8(atob(clean));
+        return this.decodeUtf8(atob(this.cleanBase64(data)));
     } catch (e) {
         return data;
     }
 };
 
 MboxParser.prototype.estimateDecodedSize = function(data, encoding) {
-    var enc = (encoding || '').toLowerCase();
-    if (enc.indexOf('base64') !== -1) {
-        var clean = data.replace(/[^A-Za-z0-9+/=]/g, '');
-        return Math.floor(clean.length * 3 / 4);
+    if ((encoding || '').toLowerCase().indexOf('base64') !== -1) {
+        return Math.floor(this.cleanBase64(data).length * 3 / 4);
     }
     return data.length;
+};
+
+// Lazily build and cache the searchable plain-text projection: the text part
+// plus the stripped HTML, so a search term present in either body is matched.
+MboxParser.prototype.getSearchText = function(email) {
+    if (typeof email.body !== 'string') {
+        var parts = [];
+        if (email.bodyText) {
+            parts.push(email.bodyText);
+        }
+        var htmlText = this.stripHtml(email.bodyHtml);
+        if (htmlText) {
+            parts.push(htmlText);
+        }
+        email.body = parts.join('\n');
+    }
+    return email.body;
 };
 
 MboxParser.prototype.stripHtml = function(html) {
@@ -398,31 +395,16 @@ MboxParser.prototype.stripHtml = function(html) {
 };
 
 MboxParser.prototype.attachmentToBlob = function(attachment) {
+    // attachment.encoding is already lowercased/trimmed at parse time
+    var encoding = attachment.encoding || '';
     var bytes;
-    var encoding = (attachment.encoding || '').toLowerCase();
 
     if (encoding.indexOf('base64') !== -1) {
-        var clean = attachment.data.replace(/[^A-Za-z0-9+/=]/g, '');
-        var binary = atob(clean);
-        bytes = new Uint8Array(binary.length);
-        for (var i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-        }
+        bytes = this.stringToBytes(atob(this.cleanBase64(attachment.data)));
     } else if (encoding.indexOf('quoted-printable') !== -1) {
-        var qp = attachment.data
-            .replace(/=\r?\n/g, '')
-            .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
-                return String.fromCharCode(parseInt(hex, 16));
-            });
-        bytes = new Uint8Array(qp.length);
-        for (var j = 0; j < qp.length; j++) {
-            bytes[j] = qp.charCodeAt(j) & 0xff;
-        }
+        bytes = this.stringToBytes(this.decodeQuotedPrintable(attachment.data));
     } else {
-        bytes = new Uint8Array(attachment.data.length);
-        for (var k = 0; k < attachment.data.length; k++) {
-            bytes[k] = attachment.data.charCodeAt(k) & 0xff;
-        }
+        bytes = this.stringToBytes(attachment.data);
     }
 
     return new Blob([bytes], {
@@ -460,7 +442,7 @@ MboxParser.prototype.searchEmails = function(query) {
         var email = this.emails[i];
         if (email.from.toLowerCase().indexOf(searchTerm) !== -1 ||
             email.subject.toLowerCase().indexOf(searchTerm) !== -1 ||
-            email.body.toLowerCase().indexOf(searchTerm) !== -1 ||
+            this.getSearchText(email).toLowerCase().indexOf(searchTerm) !== -1 ||
             email.to.toLowerCase().indexOf(searchTerm) !== -1) {
             this.filteredEmails.push(email);
         }
@@ -931,7 +913,7 @@ MboxViewer.prototype.emailMatchesSearch = function(email) {
     return (email.from && email.from.toLowerCase().indexOf(query) !== -1) ||
            (email.to && email.to.toLowerCase().indexOf(query) !== -1) ||
            (email.subject && email.subject.toLowerCase().indexOf(query) !== -1) ||
-           (email.body && email.body.toLowerCase().indexOf(query) !== -1) ||
+           (this.parser.getSearchText(email).toLowerCase().indexOf(query) !== -1) ||
            (email.gmailLabels && email.gmailLabels.some(function(label) {
                return label.toLowerCase().indexOf(query) !== -1;
            }));
@@ -1038,8 +1020,7 @@ MboxViewer.prototype.displayEmail = function(email) {
     this.emailViewer.innerHTML = headerInfo + this.buildAttachmentsHtml(email);
 
     // Render the body: HTML in a sandboxed iframe, otherwise plain text
-    var html = email.bodyHtml ? email.bodyHtml.replace(/^\s+|\s+$/g, '') : '';
-    if (html) {
+    if (email.bodyHtml && email.bodyHtml.replace(/^\s+|\s+$/g, '')) {
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
         // Empty sandbox: render markup/CSS but block scripts, forms and same-origin access
@@ -1170,7 +1151,6 @@ MboxViewer.prototype.displayEmailList = function() {
     for (var i = 0; i < emailElements.length; i++) {
         (function(index, element) {
             element.addEventListener('click', function() {
-                console.log('Email clicked:', index);
                 self.displayEmail(self.parser.getFilteredEmails()[index]);
                 self.highlightSelectedEmail(element);
             });
@@ -1233,7 +1213,6 @@ MboxViewer.prototype.loadMoreEmails = function() {
             var index = parseInt(element.getAttribute('data-index'));
             element.classList.add('has-handler');
             element.addEventListener('click', function() {
-                console.log('Email clicked:', index);
                 self.displayEmail(self.parser.getFilteredEmails()[index]);
                 self.highlightSelectedEmail(element);
             });
