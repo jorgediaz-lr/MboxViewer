@@ -522,6 +522,64 @@ MboxViewer.prototype.attachEventListeners = function() {
             self.performSearch();
         }
     });
+    document.addEventListener('keydown', function(e) {
+        self.handleKeydown(e);
+    });
+};
+
+MboxViewer.prototype.handleKeydown = function(e) {
+    // Ignore navigation keys while typing in a field
+    var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+        return;
+    }
+
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+        this.moveSelection(1);
+        e.preventDefault();
+    } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        this.moveSelection(-1);
+        e.preventDefault();
+    } else if (e.key === ']') {
+        this.gotoAdjacentChunk(1);
+    } else if (e.key === '[') {
+        this.gotoAdjacentChunk(-1);
+    }
+};
+
+// Move the highlighted email up/down the currently rendered list (works in the
+// normal list, chunk view and search results since all render .email-item).
+MboxViewer.prototype.moveSelection = function(delta) {
+    var items = this.emailList.querySelectorAll('.email-item');
+    if (!items.length) {
+        return;
+    }
+
+    var index = -1;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains('selected')) {
+            index = i;
+            break;
+        }
+    }
+
+    var next = (index === -1) ? (delta > 0 ? 0 : items.length - 1) : index + delta;
+    next = Math.max(0, Math.min(items.length - 1, next));
+
+    var target = items[next];
+    target.click();
+    target.scrollIntoView({ block: 'nearest' });
+};
+
+// In chunked mode, [ / ] move between chunks via the existing nav buttons.
+MboxViewer.prototype.gotoAdjacentChunk = function(delta) {
+    var button = document.getElementById(delta > 0 ? 'nextChunk' : 'prevChunk');
+    if (button && !button.disabled) {
+        button.click();
+    }
 };
 
 MboxViewer.prototype.handleFileSelect = function(event) {
