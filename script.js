@@ -59,7 +59,8 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         bodyText: '',
         bodyHtml: '',
         attachments: [],
-        headers: this.parseHeaders(headerBlock)
+        headers: this.parseHeaders(headerBlock),
+        raw: rawEmail
     };
 
     // Resolve convenience fields from the fully-unfolded headers
@@ -1006,6 +1007,15 @@ MboxViewer.prototype.displaySearchResults = function() {
 };
 
 MboxViewer.prototype.displayEmail = function(email) {
+    // New selection: remember it and reset to the formatted view
+    this.currentEmail = email;
+    this.showRawSource = false;
+    this.renderEmail();
+};
+
+MboxViewer.prototype.renderEmail = function() {
+    var email = this.currentEmail;
+
     if (!this.emailViewer) {
         this.emailViewer = document.getElementById('emailViewer');
     }
@@ -1044,16 +1054,27 @@ MboxViewer.prototype.displayEmail = function(email) {
         labelsSection +
         gmailInfo +
         (email.messageId ? '<strong>Message-ID:</strong> ' + this.escapeHtml(email.messageId) + '<br>' : '') +
+        '<div class="email-actions">' +
+            '<button type="button" class="email-download">⬇ Download .eml</button>' +
+            '<button type="button" class="email-raw-toggle">' +
+                (this.showRawSource ? 'View formatted' : 'View raw') +
+            '</button>' +
+        '</div>' +
         '</div>';
 
     // Reset the viewer with the header plus any attachment list
     this.emailViewer.innerHTML = headerInfo + this.buildAttachmentsHtml(email);
 
-    // Render the body: HTML in a sandboxed iframe, otherwise plain text
-    if (email.bodyHtml && email.bodyHtml.replace(/^\s+|\s+$/g, '')) {
+    if (this.showRawSource) {
+        // Raw view: the original message source, as plain text
+        var rawPre = document.createElement('pre');
+        rawPre.className = 'email-content email-raw';
+        rawPre.textContent = email.raw || email.bodyText || '(No content)';
+        this.emailViewer.appendChild(rawPre);
+    } else if (email.bodyHtml && email.bodyHtml.replace(/^\s+|\s+$/g, '')) {
+        // HTML body in a sandboxed iframe (scripts/forms/same-origin blocked)
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
-        // Empty sandbox: render markup/CSS but block scripts, forms and same-origin access
         frame.setAttribute('sandbox', '');
         frame.srcdoc = email.bodyHtml;
         this.emailViewer.appendChild(frame);
@@ -1065,6 +1086,50 @@ MboxViewer.prototype.displayEmail = function(email) {
     }
 
     this.wireAttachmentDownloads(email);
+
+    var self = this;
+    var downloadButton = this.emailViewer.querySelector('.email-download');
+    if (downloadButton) {
+        downloadButton.addEventListener('click', function() {
+            self.downloadEmail(email);
+        });
+    }
+    var rawToggle = this.emailViewer.querySelector('.email-raw-toggle');
+    if (rawToggle) {
+        rawToggle.addEventListener('click', function() {
+            self.showRawSource = !self.showRawSource;
+            self.renderEmail();
+        });
+    }
+};
+
+MboxViewer.prototype.downloadEmail = function(email) {
+    try {
+        // Strip the leading mbox "From " envelope line to produce a clean .eml
+        var raw = (email.raw || '').replace(/^From .*\r?\n/, '');
+        var blob = new Blob([raw], { type: 'message/rfc822' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = this.emailFilename(email);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() {
+            URL.revokeObjectURL(url);
+        }, 1000);
+    } catch (e) {
+        alert('Could not prepare this email for download: ' + e.message);
+    }
+};
+
+MboxViewer.prototype.emailFilename = function(email) {
+    var base = (email.subject || 'email')
+        .replace(/[\\/:*?"<>|\r\n\t]+/g, '_')
+        .replace(/\s+/g, ' ')
+        .replace(/^\s+|\s+$/g, '')
+        .substring(0, 80);
+    return (base || 'email') + '.eml';
 };
 
 MboxViewer.prototype.buildAttachmentsHtml = function(email) {

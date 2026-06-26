@@ -369,11 +369,39 @@ header p {
     background-color: #f0f8ff;
 }
 
+.email-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.email-actions button {
+    background: #e5e5e7;
+    color: #1d1d1f;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 0.2s;
+}
+
+.email-actions button:hover {
+    background: #d1d1d6;
+}
+
 .email-html-frame {
     width: 100%;
     min-height: 500px;
     border: none;
     background: white;
+}
+
+.email-raw {
+    background: #fbfbfd;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .email-attachments {
