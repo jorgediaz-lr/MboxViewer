@@ -528,20 +528,20 @@ MboxViewer.prototype.handleFileSelect = function(event) {
     var file = event.target.files[0];
     if (!file) return;
 
-    // Validate file type
+    // Validate file type. Accept known extensions, anything with "mbox" in the
+    // name, and extensionless files (Thunderbird stores mbox folders as plain
+    // files like "Inbox" / "Sent"). Files with an unrelated extension (.pdf,
+    // .zip, ...) are rejected; the content check on load is the real guard.
     var validExtensions = ['.mbox', '.txt', '.eml'];
     var fileName = file.name.toLowerCase();
-    var hasValidExtension = false;
+    var dotIndex = fileName.lastIndexOf('.');
+    var extension = dotIndex > 0 ? fileName.substring(dotIndex) : '';
+    var hasNoExtension = (extension === '');
+    var hasValidExtension = (validExtensions.indexOf(extension) !== -1);
+    var looksLikeMbox = (fileName.indexOf('mbox') !== -1);
 
-    for (var i = 0; i < validExtensions.length; i++) {
-        if (fileName.indexOf(validExtensions[i]) !== -1) {
-            hasValidExtension = true;
-            break;
-        }
-    }
-
-    if (!hasValidExtension && fileName.indexOf('mbox') === -1) {
-        this.showError('Please select a valid mbox file (.mbox, .txt, or .eml)');
+    if (!hasNoExtension && !hasValidExtension && !looksLikeMbox) {
+        this.showError('Please select an mbox file (.mbox, .txt, .eml, or a Thunderbird file with no extension)');
         return;
     }
 
