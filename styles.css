@@ -74,22 +74,69 @@ header p {
     margin-bottom: 20px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.search-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1d1d1f;
+}
+
+.search-toggle-icon {
+    color: #86868b;
+    transition: transform 0.2s;
+}
+
+.search-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.search-section.collapsed {
+    gap: 0;
+}
+
+.search-section.collapsed .search-body {
+    display: none;
+}
+
+.search-section.collapsed .search-toggle-icon {
+    transform: rotate(-90deg);
+}
+
+.search-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.search-actions {
+    display: flex;
     gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Push the buttons to the right, leaving the date filters on the left */
+#searchBtn {
+    margin-left: auto;
 }
 
 #searchInput {
-    flex: 1;
-    padding: 12px 16px;
-    border: 2px solid #e5e5e7;
-    border-radius: 8px;
-    font-size: 1rem;
-    outline: none;
-    transition: border-color 0.2s;
-}
-
-#searchInput:focus {
-    border-color: #007aff;
+    flex: 2;
+    min-width: 200px;
 }
 
 #searchBtn, #clearBtn {
@@ -119,20 +166,8 @@ header p {
     background: #d1d1d6;
 }
 
-.filter-section {
-    background: white;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.filter-section input[type="text"],
-.filter-section select {
+.search-controls input[type="text"],
+.search-controls select {
     padding: 10px 12px;
     border: 2px solid #e5e5e7;
     border-radius: 8px;
@@ -141,13 +176,13 @@ header p {
     transition: border-color 0.2s;
 }
 
-.filter-section input[type="text"] {
+#senderFilter {
     flex: 1;
     min-width: 160px;
 }
 
-.filter-section input[type="text"]:focus,
-.filter-section select:focus {
+.search-controls input[type="text"]:focus,
+.search-controls select:focus {
     border-color: #007aff;
 }
 

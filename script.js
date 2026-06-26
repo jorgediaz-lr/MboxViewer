@@ -536,6 +536,8 @@ MboxViewer.prototype.initializeElements = function() {
     this.searchInput = document.getElementById('searchInput');
     this.searchBtn = document.getElementById('searchBtn');
     this.clearBtn = document.getElementById('clearBtn');
+    this.searchSection = document.getElementById('searchSection');
+    this.searchToggle = document.getElementById('searchToggle');
     this.senderInput = document.getElementById('senderFilter');
     this.labelFilter = document.getElementById('labelFilter');
     this.dateFromInput = document.getElementById('dateFrom');
@@ -559,9 +561,20 @@ MboxViewer.prototype.attachEventListeners = function() {
             self.performSearch();
         }
     });
+    if (this.searchToggle) {
+        this.searchToggle.addEventListener('click', function() {
+            self.toggleSearchSection();
+        });
+    }
     document.addEventListener('keydown', function(e) {
         self.handleKeydown(e);
     });
+};
+
+MboxViewer.prototype.toggleSearchSection = function() {
+    if (!this.searchSection) return;
+    var collapsed = this.searchSection.classList.toggle('collapsed');
+    this.searchToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
 };
 
 MboxViewer.prototype.handleKeydown = function(e) {

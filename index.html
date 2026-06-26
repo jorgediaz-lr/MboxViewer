@@ -10,7 +10,6 @@
     <div class="container">
         <header>
             <h1>📧 Mbox File Viewer</h1>
-            <p>View your Gmail exports and other mbox files</p>
         </header>
 
         <div class="file-input-section">
@@ -19,19 +18,26 @@
             <div class="file-info" id="fileInfo"></div>
         </div>
 
-        <div class="search-section">
-            <input type="text" id="searchInput" placeholder="Search emails..." />
-            <button id="searchBtn">Search</button>
-            <button id="clearBtn">Clear</button>
-        </div>
-
-        <div class="filter-section">
-            <input type="text" id="senderFilter" placeholder="From contains…" />
-            <select id="labelFilter" title="Filter by Gmail label">
-                <option value="">All labels</option>
-            </select>
-            <label class="filter-date">From <input type="date" id="dateFrom" /></label>
-            <label class="filter-date">To <input type="date" id="dateTo" /></label>
+        <div class="search-section" id="searchSection">
+            <button type="button" class="search-toggle" id="searchToggle" aria-expanded="true">
+                <span>Search &amp; filters</span>
+                <span class="search-toggle-icon" aria-hidden="true">▾</span>
+            </button>
+            <div class="search-body">
+                <div class="search-controls">
+                    <input type="text" id="searchInput" placeholder="Search emails…" />
+                    <input type="text" id="senderFilter" placeholder="From contains…" />
+                    <select id="labelFilter" title="Filter by Gmail label">
+                        <option value="">All labels</option>
+                    </select>
+                </div>
+                <div class="search-actions">
+                    <label class="filter-date">From <input type="date" id="dateFrom" /></label>
+                    <label class="filter-date">To <input type="date" id="dateTo" /></label>
+                    <button id="searchBtn">Search</button>
+                    <button id="clearBtn">Clear</button>
+                </div>
+            </div>
         </div>
 
         <div class="main-content">
