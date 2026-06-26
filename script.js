@@ -684,6 +684,7 @@ MboxViewer.prototype.processFile = function(file) {
         if (self.emailViewer) {
             self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
         }
+        self.restoreBookmark();
     });
 };
 
@@ -933,10 +934,62 @@ MboxViewer.prototype.wireListItems = function() {
 MboxViewer.prototype.openEmail = function(position, element) {
     var entry = this.filtered[position];
     if (!entry) return;
+    this.saveBookmark(entry);
     var self = this;
     this.loadEmail(entry, function(email) {
         self.selectEmail(email, element);
     });
+};
+
+// --- Bookmarking: remember the last-opened email per file (name+size), so
+// reopening the same file resumes where you left off. ---
+
+MboxViewer.prototype.bookmarkKey = function() {
+    return this.file ? ('mboxBookmark:' + this.file.name + ':' + this.file.size) : null;
+};
+
+MboxViewer.prototype.saveBookmark = function(entry) {
+    var key = this.bookmarkKey();
+    if (!key) return;
+    try {
+        localStorage.setItem(key, JSON.stringify({ offset: entry.offset, messageId: entry.messageId }));
+    } catch (e) {
+        // localStorage unavailable (private mode / disabled) — bookmarking is best-effort
+    }
+};
+
+MboxViewer.prototype.restoreBookmark = function() {
+    var key = this.bookmarkKey();
+    if (!key || !this.filtered) return;
+
+    var saved;
+    try {
+        var raw = localStorage.getItem(key);
+        if (!raw) return;
+        saved = JSON.parse(raw);
+    } catch (e) {
+        return;
+    }
+
+    // Locate the bookmarked email in the current list (match on byte offset,
+    // verified by Message-ID when present).
+    var position = -1;
+    for (var i = 0; i < this.filtered.length; i++) {
+        if (this.filtered[i].offset === saved.offset &&
+            (!saved.messageId || this.filtered[i].messageId === saved.messageId)) {
+            position = i;
+            break;
+        }
+    }
+    if (position === -1) return;
+
+    // Re-open it; highlight + scroll its row into view if it's already rendered
+    // (rows past the initial 1000 aren't, so only the viewer is restored there).
+    var row = this.emailList.querySelector('.email-item[data-index="' + position + '"]');
+    this.openEmail(position, row);
+    if (row) {
+        row.scrollIntoView({ block: 'center' });
+    }
 };
 
 // Filter the index by metadata criteria (no body). Used when there's no
@@ -1285,7 +1338,10 @@ MboxViewer.prototype.highlightSelectedEmail = function(selectedItem) {
     for (var i = 0; i < items.length; i++) {
         items[i].classList.remove('selected');
     }
-    selectedItem.classList.add('selected');
+    // selectedItem may be null when restoring a bookmark whose row isn't rendered
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
 };
 
 MboxViewer.prototype.updateStats = function() {
