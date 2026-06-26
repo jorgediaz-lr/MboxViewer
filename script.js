@@ -43,23 +43,35 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         date: '',
         messageId: '',
         body: '',
+        bodyText: '',
+        bodyHtml: '',
+        attachments: [],
         headers: {},
         raw: rawEmail
     };
 
     var headerMode = true;
     var bodyLines = [];
+    var lastHeader = null;
 
     for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
+        var line = lines[i].replace(/\r$/, '');
 
         if (headerMode) {
-            if (line.trim() === '') {
+            // Skip the mbox "From " envelope line that precedes the real headers
+            if (i === 0 && line.indexOf('From ') === 0) {
+                continue;
+            }
+
+            // A blank line ends the header block
+            if (line === '') {
                 headerMode = false;
                 continue;
             }
 
-            if (line.charAt(0) === ' ' || line.charAt(0) === '\t') {
+            // Folded continuation lines (leading whitespace) belong to the previous header
+            if ((line.charAt(0) === ' ' || line.charAt(0) === '\t') && lastHeader !== null) {
+                email.headers[lastHeader] += ' ' + line.replace(/^\s+/, '');
                 continue;
             }
 
@@ -67,35 +79,67 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
             if (colonIndex > 0) {
                 var header = line.substring(0, colonIndex).toLowerCase();
                 var value = line.substring(colonIndex + 1).replace(/^\s+/, '');
-                
                 email.headers[header] = value;
-                
-                if (header === 'from') {
-                    email.from = this.parseEmailAddress(this.decodeHeader(value)).replace(/\r?\n/g, '');
-                } else if (header === 'to') {
-                    email.to = this.parseEmailAddress(this.decodeHeader(value)).replace(/\r?\n/g, '');
-                } else if (header === 'subject') {
-                    email.subject = this.decodeHeader(value).replace(/\r?\n/g, '');
-                } else if (header === 'date') {
-                    email.date = this.parseDate(value);
-                } else if (header === 'message-id') {
-                    email.messageId = value.replace(/\r?\n/g, '');
-                } else if (header === 'x-gmail-labels') {
-                    email.gmailLabels = this.parseGmailLabels(value);
-                } else if (header === 'x-gmail-received') {
-                    email.gmailReceived = value;
-                } else if (header === 'x-gmail-message-state') {
-                    email.gmailState = value;
-                } else if (header === 'x-gmail-thread-id') {
-                    email.gmailThreadId = value;
-                }
+                lastHeader = header;
             }
         } else {
             bodyLines.push(line);
         }
     }
 
-    email.body = this.decodeEmailBody(bodyLines.join('\n').replace(/^\s+|\s+$/g, ''));
+    // Resolve convenience fields from the fully-unfolded headers
+    var h = email.headers;
+    if (h.from) {
+        email.from = this.parseEmailAddress(this.decodeHeader(h.from)).replace(/\r?\n/g, '');
+    }
+    if (h.to) {
+        email.to = this.parseEmailAddress(this.decodeHeader(h.to)).replace(/\r?\n/g, '');
+    }
+    if (h.subject) {
+        email.subject = this.decodeHeader(h.subject).replace(/\r?\n/g, '');
+    }
+    if (h.date) {
+        email.date = this.parseDate(h.date);
+    }
+    if (h['message-id']) {
+        email.messageId = h['message-id'].replace(/\r?\n/g, '');
+    }
+    if (h['x-gmail-labels']) {
+        email.gmailLabels = this.parseGmailLabels(h['x-gmail-labels']);
+    }
+    if (h['x-gmail-received']) {
+        email.gmailReceived = h['x-gmail-received'];
+    }
+    if (h['x-gmail-message-state']) {
+        email.gmailState = h['x-gmail-message-state'];
+    }
+    if (h['x-gmail-thread-id']) {
+        email.gmailThreadId = h['x-gmail-thread-id'];
+    }
+
+    // Walk the MIME tree to populate bodyText, bodyHtml and attachments
+    var rawBody = bodyLines.join('\n').replace(/^\s+/, '');
+    this.processMimePart(
+        email,
+        h['content-type'] || 'text/plain',
+        h['content-transfer-encoding'] || '',
+        h['content-disposition'] || '',
+        rawBody
+    );
+
+    // Plain-text projection used for search and as a display fallback. Combine
+    // the text part and the stripped HTML so a search term present in either is
+    // matched (e.g. HTML-only marketing mail with a token plain-text part).
+    var searchParts = [];
+    if (email.bodyText) {
+        searchParts.push(email.bodyText);
+    }
+    var htmlText = this.stripHtml(email.bodyHtml);
+    if (htmlText) {
+        searchParts.push(htmlText);
+    }
+    email.body = searchParts.join('\n');
+
     return email;
 };
 
@@ -170,99 +214,220 @@ MboxParser.prototype.decodeUtf8 = function(str) {
     }
 };
 
-MboxParser.prototype.decodeEmailBody = function(body) {
-    if (!body) return body;
-    
-    // Handle MIME multipart messages
-    if (body.indexOf('--') === 0 && body.indexOf('Content-Type:') !== -1) {
-        return this.extractTextFromMime(body);
-    }
-    
-    // Handle quoted-printable encoding in body
-    if (body.indexOf('=') !== -1) {
-        try {
-            var decoded = body
-                // Handle quoted-printable soft line breaks
-                .replace(/=\r?\n/g, '')
-                // Decode hex sequences
-                .replace(/=([0-9A-F]{2})/gi, function(match, hex) {
-                    return String.fromCharCode(parseInt(hex, 16));
-                });
-            return this.decodeUtf8(decoded);
-        } catch (e) {
-            console.log('Error decoding body:', e);
-            return body;
+MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body) {
+    contentType = contentType || 'text/plain';
+    var lowerType = contentType.toLowerCase();
+
+    // Multipart container: split on its declared boundary and recurse into each part
+    if (lowerType.indexOf('multipart/') !== -1) {
+        var boundary = this.getMimeParameter(contentType, 'boundary');
+        if (boundary) {
+            var parts = this.splitMimeParts(body, boundary);
+            for (var i = 0; i < parts.length; i++) {
+                this.parseMimePartString(email, parts[i]);
+            }
+        } else {
+            // Malformed multipart without a boundary - keep the raw text
+            email.bodyText += body;
         }
+        return;
     }
-    
-    return body;
+
+    // Leaf part: classify as an attachment or as displayable body text/html
+    var lowerDisp = (disposition || '').toLowerCase();
+    var isAttachment = lowerDisp.indexOf('attachment') !== -1 ||
+        (lowerType.indexOf('text/') === -1 && lowerDisp.indexOf('inline') === -1);
+
+    if (isAttachment) {
+        var filename = this.getMimeParameter(disposition, 'filename') ||
+            this.getMimeParameter(contentType, 'name') ||
+            'attachment';
+        email.attachments.push({
+            filename: this.decodeHeader(filename),
+            contentType: contentType.split(';')[0].replace(/^\s+|\s+$/g, ''),
+            encoding: (transferEncoding || '').toLowerCase().replace(/^\s+|\s+$/g, ''),
+            data: body,
+            size: this.estimateDecodedSize(body, transferEncoding)
+        });
+        return;
+    }
+
+    var decoded = this.decodeTransferEncoding(body, transferEncoding);
+    if (lowerType.indexOf('text/html') !== -1) {
+        email.bodyHtml += decoded;
+    } else {
+        email.bodyText += decoded;
+    }
 };
 
-MboxParser.prototype.extractTextFromMime = function(mimeBody) {
-    var textContent = '';
-    var parts = mimeBody.split(/^--/m);
-    
-    for (var i = 0; i < parts.length; i++) {
-        var part = parts[i];
-        
-        // Skip boundary markers and empty parts
-        if (!part.trim() || part.indexOf('Content-Type:') === -1) {
+MboxParser.prototype.parseMimePartString = function(email, partString) {
+    // A sub-part carries its own headers, then a blank line, then its body
+    var separator = partString.indexOf('\n\n');
+    var headerBlock = '';
+    var partBody = partString;
+
+    if (separator !== -1) {
+        headerBlock = partString.substring(0, separator);
+        partBody = partString.substring(separator + 2);
+    }
+
+    var headers = this.parsePartHeaders(headerBlock);
+    this.processMimePart(
+        email,
+        headers['content-type'] || 'text/plain',
+        headers['content-transfer-encoding'] || '',
+        headers['content-disposition'] || '',
+        partBody
+    );
+};
+
+MboxParser.prototype.parsePartHeaders = function(headerBlock) {
+    var headers = {};
+    if (!headerBlock) return headers;
+
+    var lines = headerBlock.split('\n');
+    var lastHeader = null;
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].replace(/\r$/, '');
+
+        if ((line.charAt(0) === ' ' || line.charAt(0) === '\t') && lastHeader !== null) {
+            headers[lastHeader] += ' ' + line.replace(/^\s+/, '');
             continue;
         }
-        
-        // Look for text/plain parts
-        if (part.indexOf('Content-Type: text/plain') !== -1) {
-            var bodyStart = part.indexOf('\n\n');
-            if (bodyStart === -1) bodyStart = part.indexOf('\r\n\r\n');
-            
-            if (bodyStart !== -1) {
-                var content = part.substring(bodyStart + 2);
-                
-                // Handle quoted-printable in this part
-                if (part.indexOf('Content-Transfer-Encoding: quoted-printable') !== -1) {
-                    content = content
-                        .replace(/=\r?\n/g, '')
-                        .replace(/=([0-9A-F]{2})/gi, function(match, hex) {
-                            return String.fromCharCode(parseInt(hex, 16));
-                        });
-                }
-                
-                textContent += this.decodeUtf8(content) + '\n\n';
-            }
-        }
-        // If no text/plain found, try text/html and strip tags
-        else if (part.indexOf('Content-Type: text/html') !== -1 && textContent === '') {
-            var bodyStart = part.indexOf('\n\n');
-            if (bodyStart === -1) bodyStart = part.indexOf('\r\n\r\n');
-            
-            if (bodyStart !== -1) {
-                var htmlContent = part.substring(bodyStart + 2);
-                
-                // Handle quoted-printable in HTML part
-                if (part.indexOf('Content-Transfer-Encoding: quoted-printable') !== -1) {
-                    htmlContent = htmlContent
-                        .replace(/=\r?\n/g, '')
-                        .replace(/=([0-9A-F]{2})/gi, function(match, hex) {
-                            return String.fromCharCode(parseInt(hex, 16));
-                        });
-                }
-                
-                // Basic HTML tag removal
-                var textFromHtml = this.decodeUtf8(htmlContent)
-                    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                    .replace(/<[^>]*>/g, '')
-                    .replace(/&nbsp;/g, ' ')
-                    .replace(/&lt;/g, '<')
-                    .replace(/&gt;/g, '>')
-                    .replace(/&amp;/g, '&');
-                    
-                textContent += textFromHtml + '\n\n';
-            }
+
+        var colonIndex = line.indexOf(':');
+        if (colonIndex > 0) {
+            var name = line.substring(0, colonIndex).toLowerCase();
+            var value = line.substring(colonIndex + 1).replace(/^\s+/, '');
+            headers[name] = value;
+            lastHeader = name;
         }
     }
-    
-    return textContent.trim() || 'No readable text content found in this email.';
+
+    return headers;
+};
+
+MboxParser.prototype.splitMimeParts = function(body, boundary) {
+    var delimiter = '--' + boundary;
+    var rawParts = body.split(delimiter);
+    var parts = [];
+
+    for (var i = 0; i < rawParts.length; i++) {
+        // Index 0 is the preamble before the first boundary - ignore it
+        if (i === 0) continue;
+
+        var part = rawParts[i];
+
+        // The closing delimiter is "--boundary--", so a part starting with "--"
+        // marks the end of this multipart block
+        if (part.charAt(0) === '-' && part.charAt(1) === '-') {
+            break;
+        }
+
+        // Drop the line break that immediately follows the boundary delimiter
+        parts.push(part.replace(/^\r?\n/, ''));
+    }
+
+    return parts;
+};
+
+MboxParser.prototype.getMimeParameter = function(headerValue, paramName) {
+    if (!headerValue) return '';
+
+    var quoted = new RegExp(paramName + '\\s*=\\s*"([^"]*)"', 'i');
+    var match = headerValue.match(quoted);
+    if (match) return match[1];
+
+    var unquoted = new RegExp(paramName + '\\s*=\\s*([^;\\r\\n\\s]+)', 'i');
+    match = headerValue.match(unquoted);
+    if (match) return match[1];
+
+    return '';
+};
+
+MboxParser.prototype.decodeTransferEncoding = function(content, encoding) {
+    encoding = (encoding || '').toLowerCase().replace(/^\s+|\s+$/g, '');
+
+    if (encoding.indexOf('base64') !== -1) {
+        return this.decodeBase64Text(content);
+    }
+
+    if (encoding.indexOf('quoted-printable') !== -1) {
+        var qp = content
+            .replace(/=\r?\n/g, '')
+            .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
+                return String.fromCharCode(parseInt(hex, 16));
+            });
+        return this.decodeUtf8(qp);
+    }
+
+    // 7bit / 8bit / binary: FileReader already decoded the bytes as UTF-8
+    return content;
+};
+
+MboxParser.prototype.decodeBase64Text = function(data) {
+    try {
+        var clean = data.replace(/[^A-Za-z0-9+/=]/g, '');
+        return this.decodeUtf8(atob(clean));
+    } catch (e) {
+        return data;
+    }
+};
+
+MboxParser.prototype.estimateDecodedSize = function(data, encoding) {
+    var enc = (encoding || '').toLowerCase();
+    if (enc.indexOf('base64') !== -1) {
+        var clean = data.replace(/[^A-Za-z0-9+/=]/g, '');
+        return Math.floor(clean.length * 3 / 4);
+    }
+    return data.length;
+};
+
+MboxParser.prototype.stripHtml = function(html) {
+    if (!html) return '';
+    return html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/^\s+|\s+$/g, '');
+};
+
+MboxParser.prototype.attachmentToBlob = function(attachment) {
+    var bytes;
+    var encoding = (attachment.encoding || '').toLowerCase();
+
+    if (encoding.indexOf('base64') !== -1) {
+        var clean = attachment.data.replace(/[^A-Za-z0-9+/=]/g, '');
+        var binary = atob(clean);
+        bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+    } else if (encoding.indexOf('quoted-printable') !== -1) {
+        var qp = attachment.data
+            .replace(/=\r?\n/g, '')
+            .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
+                return String.fromCharCode(parseInt(hex, 16));
+            });
+        bytes = new Uint8Array(qp.length);
+        for (var j = 0; j < qp.length; j++) {
+            bytes[j] = qp.charCodeAt(j) & 0xff;
+        }
+    } else {
+        bytes = new Uint8Array(attachment.data.length);
+        for (var k = 0; k < attachment.data.length; k++) {
+            bytes[k] = attachment.data.charCodeAt(k) & 0xff;
+        }
+    }
+
+    return new Blob([bytes], {
+        type: attachment.contentType || 'application/octet-stream'
+    });
 };
 
 MboxParser.prototype.parseGmailLabels = function(labelString) {
@@ -367,14 +532,14 @@ MboxViewer.prototype.handleFileSelect = function(event) {
     var validExtensions = ['.mbox', '.txt', '.eml'];
     var fileName = file.name.toLowerCase();
     var hasValidExtension = false;
-    
+
     for (var i = 0; i < validExtensions.length; i++) {
         if (fileName.indexOf(validExtensions[i]) !== -1) {
             hasValidExtension = true;
             break;
         }
     }
-    
+
     if (!hasValidExtension && fileName.indexOf('mbox') === -1) {
         this.showError('Please select a valid mbox file (.mbox, .txt, or .eml)');
         return;
@@ -640,12 +805,18 @@ MboxViewer.prototype.performSearch = function() {
         this.showError('Please enter a search term');
         return;
     }
-    
+
+    // Small-file mode: every email is already parsed in memory, so filter directly
     if (!this.file) {
-        this.showError('Please load an mbox file first');
+        this.parser.searchEmails(this.searchInput.value);
+        this.displayEmailList();
+        this.updateStats();
+        if (this.emailViewer) {
+            this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the search results</div>';
+        }
         return;
     }
-    
+
     console.log('Starting search for:', query);
     this.searchResults = [];
     this.currentSearchChunk = 0;
@@ -660,10 +831,22 @@ MboxViewer.prototype.performSearch = function() {
 MboxViewer.prototype.clearSearch = function() {
     console.log('Clearing search');
     this.searchInput.value = '';
+
+    // Small-file mode: reset the in-memory filter and re-render the full list
+    if (!this.file) {
+        this.parser.searchEmails('');
+        this.displayEmailList();
+        this.updateStats();
+        if (this.emailViewer) {
+            this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
+        }
+        return;
+    }
+
     this.isSearchMode = false;
     this.searchResults = [];
     this.searchQuery = '';
-    
+
     // Return to normal chunk view
     this.showChunkNavigation();
     this.loadChunk(0);
@@ -805,26 +988,16 @@ MboxViewer.prototype.displaySearchResults = function() {
 };
 
 MboxViewer.prototype.displayEmail = function(email) {
-    console.log('displayEmail called with:', email);
-    console.log('emailViewer element exists:', !!this.emailViewer);
-    console.log('emailViewer innerHTML before:', this.emailViewer ? this.emailViewer.innerHTML.substring(0, 100) : 'N/A');
-    
-    if (!email) {
-        console.log('No email provided');
-        if (this.emailViewer) {
-            this.emailViewer.innerHTML = '<div class="no-email-selected">No email selected</div>';
-        }
+    if (!this.emailViewer) {
+        this.emailViewer = document.getElementById('emailViewer');
+    }
+    if (!this.emailViewer) {
         return;
     }
-
-    console.log('Raw email object:', {
-        from: email.from,
-        subject: email.subject,
-        bodyLength: email.body ? email.body.length : 0,
-        labels: email.gmailLabels,
-        rawFrom: email.headers ? email.headers.from : 'no headers',
-        rawSubject: email.headers ? email.headers.subject : 'no headers'
-    });
+    if (!email) {
+        this.emailViewer.innerHTML = '<div class="no-email-selected">No email selected</div>';
+        return;
+    }
 
     // Build Gmail labels section
     var labelsSection = '';
@@ -835,7 +1008,7 @@ MboxViewer.prototype.displayEmail = function(email) {
         }
         labelsSection += '<br>';
     }
-    
+
     // Build additional Gmail info
     var gmailInfo = '';
     if (email.gmailThreadId) {
@@ -855,29 +1028,86 @@ MboxViewer.prototype.displayEmail = function(email) {
         (email.messageId ? '<strong>Message-ID:</strong> ' + this.escapeHtml(email.messageId) + '<br>' : '') +
         '</div>';
 
-    var emailBody = email.body || '(No content)';
-    var content = headerInfo + '<div class="email-content">' + this.escapeHtml(emailBody) + '</div>';
+    // Reset the viewer with the header plus any attachment list
+    this.emailViewer.innerHTML = headerInfo + this.buildAttachmentsHtml(email);
 
-    // Make sure we have a valid emailViewer element
-    if (!this.emailViewer) {
-        this.emailViewer = document.getElementById('emailViewer');
-        console.log('Refreshed emailViewer reference:', !!this.emailViewer);
+    // Render the body: HTML in a sandboxed iframe, otherwise plain text
+    var html = email.bodyHtml ? email.bodyHtml.replace(/^\s+|\s+$/g, '') : '';
+    if (html) {
+        var frame = document.createElement('iframe');
+        frame.className = 'email-html-frame';
+        // Empty sandbox: render markup/CSS but block scripts, forms and same-origin access
+        frame.setAttribute('sandbox', '');
+        frame.srcdoc = email.bodyHtml;
+        this.emailViewer.appendChild(frame);
+    } else {
+        var contentDiv = document.createElement('div');
+        contentDiv.className = 'email-content';
+        contentDiv.textContent = email.bodyText || email.body || '(No content)';
+        this.emailViewer.appendChild(contentDiv);
     }
-    
-    if (!this.emailViewer) {
-        console.error('EmailViewer element still not found! DOM might be corrupted.');
+
+    this.wireAttachmentDownloads(email);
+};
+
+MboxViewer.prototype.buildAttachmentsHtml = function(email) {
+    if (!email.attachments || email.attachments.length === 0) {
+        return '';
+    }
+
+    var items = [];
+    for (var i = 0; i < email.attachments.length; i++) {
+        var attachment = email.attachments[i];
+        var name = attachment.filename || 'attachment';
+        var meta = (attachment.contentType || 'application/octet-stream') +
+            ' · ' + this.formatFileSize(attachment.size || 0);
+
+        items.push('<div class="attachment-item">' +
+            '<span class="attachment-icon">📎</span>' +
+            '<span class="attachment-name">' + this.escapeHtml(name) + '</span>' +
+            '<span class="attachment-meta">' + this.escapeHtml(meta) + '</span>' +
+            '<button class="attachment-download" data-att-index="' + i + '">Download</button>' +
+            '</div>');
+    }
+
+    return '<div class="email-attachments">' +
+        '<div class="attachments-title">Attachments (' + email.attachments.length + ')</div>' +
+        items.join('') +
+        '</div>';
+};
+
+MboxViewer.prototype.wireAttachmentDownloads = function(email) {
+    if (!email.attachments || email.attachments.length === 0) {
         return;
     }
-    
-    console.log('Setting email viewer content');
-    console.log('Content length:', content.length);
-    
+
+    var self = this;
+    var buttons = this.emailViewer.querySelectorAll('.attachment-download');
+    for (var i = 0; i < buttons.length; i++) {
+        (function(button) {
+            button.addEventListener('click', function() {
+                var index = parseInt(button.getAttribute('data-att-index'), 10);
+                self.downloadAttachment(email.attachments[index]);
+            });
+        })(buttons[i]);
+    }
+};
+
+MboxViewer.prototype.downloadAttachment = function(attachment) {
     try {
-        this.emailViewer.innerHTML = content;
-        console.log('Email viewer updated successfully');
-        console.log('emailViewer innerHTML after:', this.emailViewer.innerHTML.substring(0, 200));
-    } catch (error) {
-        console.error('Error setting email viewer content:', error);
+        var blob = this.parser.attachmentToBlob(attachment);
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = attachment.filename || 'attachment';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() {
+            URL.revokeObjectURL(url);
+        }, 1000);
+    } catch (e) {
+        alert('Could not prepare this attachment for download: ' + e.message);
     }
 };
 
@@ -942,7 +1172,7 @@ MboxViewer.prototype.displayEmailList = function() {
         (function(index, element) {
             element.addEventListener('click', function() {
                 console.log('Email clicked:', index);
-                self.displayEmail(index);
+                self.displayEmail(self.parser.getFilteredEmails()[index]);
                 self.highlightSelectedEmail(element);
             });
         })(i, emailElements[i]);
@@ -1005,7 +1235,7 @@ MboxViewer.prototype.loadMoreEmails = function() {
             element.classList.add('has-handler');
             element.addEventListener('click', function() {
                 console.log('Email clicked:', index);
-                self.displayEmail(index);
+                self.displayEmail(self.parser.getFilteredEmails()[index]);
                 self.highlightSelectedEmail(element);
             });
         })(newEmailElements[i]);
@@ -1023,47 +1253,12 @@ MboxViewer.prototype.loadMoreEmails = function() {
     console.log('loadMoreEmails completed');
 };
 
-MboxViewer.prototype.displayEmail = function(index) {
-    var emails = this.parser.getFilteredEmails();
-    var email = emails[index];
-    
-    if (!email) return;
-
-    var headerInfo = '<div class="email-header">' +
-        '<strong>From:</strong> ' + this.escapeHtml(email.from) + '<br>' +
-        '<strong>To:</strong> ' + this.escapeHtml(email.to) + '<br>' +
-        '<strong>Subject:</strong> ' + this.escapeHtml(email.subject) + '<br>' +
-        '<strong>Date:</strong> ' + this.escapeHtml(email.date) + '<br>' +
-        (email.messageId ? '<strong>Message-ID:</strong> ' + this.escapeHtml(email.messageId) + '<br>' : '') +
-        '</div>';
-
-    var content = headerInfo + '<div class="email-content">' + this.escapeHtml(email.body) + '</div>';
-
-    this.emailViewer.innerHTML = content;
-};
-
 MboxViewer.prototype.highlightSelectedEmail = function(selectedItem) {
     var items = this.emailList.querySelectorAll('.email-item');
     for (var i = 0; i < items.length; i++) {
         items[i].classList.remove('selected');
     }
     selectedItem.classList.add('selected');
-};
-
-MboxViewer.prototype.performSearch = function() {
-    var query = this.searchInput.value;
-    this.parser.searchEmails(query);
-    this.displayEmailList();
-    this.updateStats();
-    this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the search results</div>';
-};
-
-MboxViewer.prototype.clearSearch = function() {
-    this.searchInput.value = '';
-    this.parser.searchEmails('');
-    this.displayEmailList();
-    this.updateStats();
-    this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
 };
 
 MboxViewer.prototype.updateStats = function() {

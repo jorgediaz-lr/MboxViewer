@@ -369,6 +369,73 @@ header p {
     background-color: #f0f8ff;
 }
 
+.email-html-frame {
+    width: 100%;
+    min-height: 500px;
+    border: none;
+    background: white;
+}
+
+.email-attachments {
+    padding: 16px 20px;
+    border-bottom: 1px solid #e5e5e7;
+    background-color: #fbfbfd;
+}
+
+.attachments-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #1d1d1f;
+    margin-bottom: 10px;
+}
+
+.attachment-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid #e5e5e7;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: white;
+}
+
+.attachment-item:last-child {
+    margin-bottom: 0;
+}
+
+.attachment-icon {
+    font-size: 1.1rem;
+}
+
+.attachment-name {
+    font-weight: 500;
+    color: #1d1d1f;
+    word-break: break-all;
+}
+
+.attachment-meta {
+    color: #86868b;
+    font-size: 0.8rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.attachment-download {
+    background: #007aff;
+    color: white;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 0.2s;
+}
+
+.attachment-download:hover {
+    background: #0056cc;
+}
+
 @media (max-width: 768px) {
     .main-content {
         grid-template-columns: 1fr;
