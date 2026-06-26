@@ -60,7 +60,7 @@ All email processing happens entirely in your browser. No data is sent to any se
 ## Limitations
 
 - Very large mbox files (>100MB) may take time to load
-- HTML emails are rendered in a sandboxed iframe (scripts disabled); inline `cid:` images are not resolved, and remote images load normally
+- HTML emails are rendered in a sandboxed iframe (scripts disabled); inline `cid:` images are rewritten to embedded data URLs, and remote images load normally
 - Attachments are listed with download links, but emails split across a 5 MB chunk boundary (in >1 GB files) may be truncated
 
 ## License

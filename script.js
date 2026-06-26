@@ -109,7 +109,8 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         h['content-type'] || 'text/plain',
         h['content-transfer-encoding'] || '',
         h['content-disposition'] || '',
-        rawBody
+        rawBody,
+        h['content-id'] || ''
     );
 
     return email;
@@ -197,7 +198,7 @@ MboxParser.prototype.decodeBytes = function(binary, charset) {
     return this.decodeUtf8(binary);
 };
 
-MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body) {
+MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body, contentId) {
     contentType = contentType || 'text/plain';
     var lowerType = contentType.toLowerCase();
 
@@ -216,10 +217,13 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
         return;
     }
 
-    // Leaf part: classify as an attachment or as displayable body text/html
+    // Leaf part: a non-text part (image/application/...) is always stored as a
+    // resource — whether its disposition is inline, attachment or absent — so
+    // inline images resolve via cid: and others can be downloaded. text/* is the
+    // displayable body unless it's explicitly an attachment.
     var lowerDisp = (disposition || '').toLowerCase();
     var isAttachment = lowerDisp.indexOf('attachment') !== -1 ||
-        (lowerType.indexOf('text/') === -1 && lowerDisp.indexOf('inline') === -1);
+        lowerType.indexOf('text/') === -1;
 
     if (isAttachment) {
         var filename = this.getMimeParameter(disposition, 'filename') ||
@@ -229,6 +233,8 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
             filename: this.decodeHeader(filename),
             contentType: contentType.split(';')[0].replace(/^\s+|\s+$/g, ''),
             encoding: (transferEncoding || '').toLowerCase().replace(/^\s+|\s+$/g, ''),
+            // Content-ID (angle brackets stripped) lets HTML cid: refs resolve to this part
+            contentId: (contentId || '').replace(/^\s+|\s+$/g, '').replace(/^<|>$/g, ''),
             data: body,
             size: this.estimateDecodedSize(body, transferEncoding)
         });
@@ -261,7 +267,8 @@ MboxParser.prototype.parseMimePartString = function(email, partString) {
         headers['content-type'] || 'text/plain',
         headers['content-transfer-encoding'] || '',
         headers['content-disposition'] || '',
-        partBody
+        partBody,
+        headers['content-id'] || ''
     );
 };
 
@@ -1215,7 +1222,7 @@ MboxViewer.prototype.renderEmail = function() {
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
         frame.setAttribute('sandbox', '');
-        frame.srcdoc = email.bodyHtml;
+        frame.srcdoc = this.inlineCidImages(email);
         this.emailViewer.appendChild(frame);
     } else {
         var contentDiv = document.createElement('div');
@@ -1239,6 +1246,48 @@ MboxViewer.prototype.renderEmail = function() {
             self.showRawSource = !self.showRawSource;
             self.renderEmail();
         });
+    }
+};
+
+// Rewrite cid: references in the HTML body to data: URLs built from the matching
+// inline part, so embedded images render inside the sandboxed iframe.
+MboxViewer.prototype.inlineCidImages = function(email) {
+    var html = email.bodyHtml;
+    if (!html || !email.attachments || email.attachments.length === 0 || html.indexOf('cid:') === -1) {
+        return html;
+    }
+
+    var self = this;
+    var atts = email.attachments;
+    return html.replace(/cid:([^"'\s>)]+)/gi, function(match, cid) {
+        var key = cid.toLowerCase();
+        for (var i = 0; i < atts.length; i++) {
+            if ((atts[i].contentId || '').toLowerCase() === key) {
+                var url = self.attachmentDataUrl(atts[i]);
+                return url || match;
+            }
+        }
+        return match;
+    });
+};
+
+// Build a data: URL for an inline part (its data is already base64, or we
+// base64-encode the decoded bytes).
+MboxViewer.prototype.attachmentDataUrl = function(attachment) {
+    var type = attachment.contentType || 'application/octet-stream';
+    var encoding = attachment.encoding || '';
+    try {
+        var base64;
+        if (encoding.indexOf('base64') !== -1) {
+            base64 = this.parser.cleanBase64(attachment.data);
+        } else if (encoding.indexOf('quoted-printable') !== -1) {
+            base64 = btoa(this.parser.decodeQuotedPrintable(attachment.data));
+        } else {
+            base64 = btoa(attachment.data);
+        }
+        return 'data:' + type + ';base64,' + base64;
+    } catch (e) {
+        return '';
     }
 };
 
