@@ -355,42 +355,6 @@ header p {
     background: #e5e5e7;
 }
 
-.chunk-navigation {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 15px 20px;
-    background: #f8f9fa;
-    border-bottom: 1px solid #e5e5e7;
-    font-weight: 500;
-}
-
-.chunk-navigation button {
-    padding: 8px 16px;
-    border: 1px solid #007aff;
-    background: #007aff;
-    color: white;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.9rem;
-    transition: background-color 0.2s;
-}
-
-.chunk-navigation button:hover:not(:disabled) {
-    background: #0056cc;
-}
-
-.chunk-navigation button:disabled {
-    background: #ccc;
-    border-color: #ccc;
-    cursor: not-allowed;
-}
-
-#chunkInfo {
-    font-weight: 600;
-    color: #1d1d1f;
-}
-
 .email-labels {
     margin-top: 4px;
     display: flex;
@@ -418,62 +382,6 @@ header p {
     border: 1px solid #bbdefb;
     margin-right: 6px;
     display: inline-block;
-}
-
-.search-progress {
-    padding: 20px;
-    background: #f8f9fa;
-    border-bottom: 1px solid #e5e5e7;
-}
-
-.search-header {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #1d1d1f;
-    margin-bottom: 10px;
-}
-
-.search-status {
-    color: #666;
-    margin-bottom: 15px;
-}
-
-#cancelSearch {
-    background: #ff3b30;
-    color: white;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.9rem;
-}
-
-#cancelSearch:hover {
-    background: #d12b20;
-}
-
-.search-result {
-    position: relative;
-    border-left: 3px solid #007aff;
-}
-
-.search-result-header {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-}
-
-.chunk-indicator {
-    background: #007aff;
-    color: white;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    font-weight: 500;
-}
-
-.search-result:hover {
-    background-color: #f0f8ff;
 }
 
 .email-actions {

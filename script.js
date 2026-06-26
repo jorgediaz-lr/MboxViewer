@@ -58,21 +58,41 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         rawBody = normalized.substring(blankLine + 2).replace(/^\s+/, '');
     }
 
+    var email = this.parseHeaderFields(headerBlock);
+    email.bodyText = '';
+    email.bodyHtml = '';
+    email.attachments = [];
+    email.raw = rawEmail;
+
+    // Walk the MIME tree to populate bodyText, bodyHtml and attachments. The
+    // searchable plain-text projection (email.body) is built lazily on first
+    // search via getSearchText, since most emails are never searched.
+    var h = email.headers;
+    this.processMimePart(
+        email,
+        h['content-type'] || 'text/plain',
+        h['content-transfer-encoding'] || '',
+        h['content-disposition'] || '',
+        rawBody,
+        h['content-id'] || ''
+    );
+
+    return email;
+};
+
+// Extract the metadata fields from a header block (no body/MIME parsing). Shared
+// by parseEmail (full parse) and the index builder (metadata + offset only).
+MboxParser.prototype.parseHeaderFields = function(headerBlock) {
+    var h = this.parseHeaders(headerBlock);
     var email = {
         from: '',
         to: '',
         subject: '',
         date: '',
+        dateValue: null,
         messageId: '',
-        bodyText: '',
-        bodyHtml: '',
-        attachments: [],
-        headers: this.parseHeaders(headerBlock),
-        raw: rawEmail
+        headers: h
     };
-
-    // Resolve convenience fields from the fully-unfolded headers
-    var h = email.headers;
     if (h.from) {
         email.from = this.parseEmailAddress(this.decodeHeader(h.from)).replace(/\r?\n/g, '');
     }
@@ -108,20 +128,32 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
     if (h['x-gmail-thread-id']) {
         email.gmailThreadId = h['x-gmail-thread-id'];
     }
-
-    // Walk the MIME tree to populate bodyText, bodyHtml and attachments. The
-    // searchable plain-text projection (email.body) is built lazily on first
-    // search via getSearchText, since most emails are never searched.
-    this.processMimePart(
-        email,
-        h['content-type'] || 'text/plain',
-        h['content-transfer-encoding'] || '',
-        h['content-disposition'] || '',
-        rawBody,
-        h['content-id'] || ''
-    );
-
     return email;
+};
+
+// Header block of a raw message (\n-normalized), without scanning the body.
+MboxParser.prototype.extractHeaderBlock = function(rawMessage) {
+    var firstNl = rawMessage.indexOf('\n');
+    var start = (rawMessage.indexOf('From ') === 0 && firstNl !== -1) ? firstNl + 1 : 0;
+    var lf = rawMessage.indexOf('\n\n', start);
+    var crlf = rawMessage.indexOf('\r\n\r\n', start);
+    var end;
+    if (lf === -1) {
+        end = (crlf === -1) ? rawMessage.length : crlf;
+    } else if (crlf === -1) {
+        end = lf;
+    } else {
+        end = Math.min(lf, crlf);
+    }
+    return rawMessage.substring(start, end).replace(/\r\n/g, '\n');
+};
+
+MboxParser.prototype.hasTrashLabel = function(labels) {
+    if (!labels) return false;
+    for (var i = 0; i < labels.length; i++) {
+        if (labels[i].toLowerCase() === 'trash') return true;
+    }
+    return false;
 };
 
 MboxParser.prototype.parseEmailAddress = function(address) {
@@ -497,47 +529,6 @@ MboxParser.prototype.matchesCriteria = function(email, c) {
     return true;
 };
 
-MboxParser.prototype.applyFilters = function(criteria) {
-    this.filteredEmails = [];
-    for (var i = 0; i < this.emails.length; i++) {
-        if (this.matchesCriteria(this.emails[i], criteria)) {
-            this.filteredEmails.push(this.emails[i]);
-        }
-    }
-    return this.filteredEmails;
-};
-
-// Distinct Gmail labels across all parsed emails, for the label filter dropdown.
-MboxParser.prototype.collectLabels = function() {
-    var seen = {};
-    var labels = [];
-    for (var i = 0; i < this.emails.length; i++) {
-        var ls = this.emails[i].gmailLabels;
-        if (!ls) continue;
-        for (var j = 0; j < ls.length; j++) {
-            var key = ls[j].toLowerCase();
-            if (!seen[key]) {
-                seen[key] = true;
-                labels.push(ls[j]);
-            }
-        }
-    }
-    labels.sort();
-    return labels;
-};
-
-MboxParser.prototype.getFilteredEmails = function() {
-    return this.filteredEmails;
-};
-
-MboxParser.prototype.getEmailCount = function() {
-    return this.emails.length;
-};
-
-MboxParser.prototype.getFilteredEmailCount = function() {
-    return this.filteredEmails.length;
-};
-
 // MboxViewer class
 function MboxViewer() {
     this.parser = new MboxParser();
@@ -610,15 +601,10 @@ MboxViewer.prototype.handleKeydown = function(e) {
     } else if (e.key === 'ArrowUp' || e.key === 'k') {
         this.moveSelection(-1);
         e.preventDefault();
-    } else if (e.key === ']') {
-        this.gotoAdjacentChunk(1);
-    } else if (e.key === '[') {
-        this.gotoAdjacentChunk(-1);
     }
 };
 
-// Move the highlighted email up/down the currently rendered list (works in the
-// normal list, chunk view and search results since all render .email-item).
+// Move the highlighted email up/down the currently rendered list.
 MboxViewer.prototype.moveSelection = function(delta) {
     var items = this.emailList.querySelectorAll('.email-item');
     if (!items.length) {
@@ -639,14 +625,6 @@ MboxViewer.prototype.moveSelection = function(delta) {
     var target = items[next];
     target.click();
     target.scrollIntoView({ block: 'nearest' });
-};
-
-// In chunked mode, [ / ] move between chunks via the existing nav buttons.
-MboxViewer.prototype.gotoAdjacentChunk = function(delta) {
-    var button = document.getElementById(delta > 0 ? 'nextChunk' : 'prevChunk');
-    if (button && !button.disabled) {
-        button.click();
-    }
 };
 
 MboxViewer.prototype.handleFileSelect = function(event) {
@@ -674,18 +652,9 @@ MboxViewer.prototype.handleFileSelect = function(event) {
     this.searchInput.value = '';
     this.resetFilterInputs();
     this.populateLabelFilter([]);
-    this.isSearchMode = false;
-    this.searchResults = [];
-    this.criteria = null;
 
     this.fileInfo.textContent = 'Selected: ' + file.name + ' (' + this.formatFileSize(file.size) + ')';
-
-    // For large files, warn user
-    if (file.size > 100 * 1024 * 1024) { // 100MB+
-        this.showLoading('Loading large file - this may take several minutes...');
-    } else {
-        this.showLoading('Reading file...');
-    }
+    this.showLoading('Reading file…');
 
     var self = this;
     setTimeout(function() {
@@ -693,15 +662,29 @@ MboxViewer.prototype.handleFileSelect = function(event) {
     }, 100);
 };
 
+// All file sizes go through one path: stream the file once to build a lightweight
+// index (metadata + byte offsets), then render the list and load each email's full
+// body on demand. Memory stays ~constant regardless of file size.
 MboxViewer.prototype.processFile = function(file) {
     var self = this;
-    
-    // For very large files, use chunked processing
-    if (file.size > 1024 * 1024 * 1024) { // 1GB+
-        this.processLargeFileChunked(file);
-    } else {
-        this.processSmallFile(file);
-    }
+    this.file = file;
+    this.viewCache = {};
+    this.viewOrder = [];
+
+    this.buildIndex(file, function(index) {
+        if (index.length === 0) {
+            self.showError('No emails found in this file. Please check if it\'s a valid mbox format.');
+            return;
+        }
+        self.populateLabelFilter(self.collectIndexLabels());
+        self.filtered = index.slice();
+        self.renderList();
+        self.updateStats();
+        self.hideLoading();
+        if (self.emailViewer) {
+            self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
+        }
+    });
 };
 
 // Convert an ArrayBuffer into a byte-preserving string (one char per byte,
@@ -717,267 +700,255 @@ MboxViewer.prototype.bufferToBinaryString = function(buffer) {
     return chunks.join('');
 };
 
-MboxViewer.prototype.processSmallFile = function(file) {
+// Stream the file once, invoking onMessage(rawText, offset, length) for every
+// complete mbox message. A tail buffer carries the partial trailing message
+// across slice boundaries, so a message straddling a slice edge is never
+// truncated (this is what fixes the old 5 MB chunk-boundary bug). The async
+// FileReader reads yield to the UI between slices.
+MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onComplete) {
     var self = this;
-    var reader = new FileReader();
+    var sliceSize = this.indexSliceSize || (8 * 1024 * 1024);
+    var carry = '';        // partial trailing message not yet finalized
+    var carryOffset = 0;   // file byte offset where `carry` begins
+    var fileOffset = 0;    // next byte to read
 
-    // Reading the file is the first 0..100% sweep of the progress bar
-    reader.onprogress = function(e) {
-        if (e.lengthComputable) {
-            self.updateProgress(e.loaded / e.total,
-                'Reading file… ' + Math.round((e.loaded / e.total) * 100) + '%');
-        }
-    };
-
-    reader.onload = function(e) {
-        // Reset to 0 for the second sweep (parsing)
-        self.updateProgress(0, 'Parsing emails…');
-        var content = self.bufferToBinaryString(e.target.result);
-
-        if (!content || (!content.indexOf || (content.indexOf('From ') === -1 && content.indexOf('Message-ID:') === -1))) {
-            self.showError('This does not appear to be a valid mbox file');
+    function readNext() {
+        if (fileOffset >= file.size) {
+            if (carry.indexOf('From ') === 0) {
+                onMessage(carry, carryOffset, carry.length);
+            }
+            onComplete();
             return;
         }
+        var end = Math.min(fileOffset + sliceSize, file.size);
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var combined = carry + self.bufferToBinaryString(e.target.result);
+            var base = carryOffset; // file offset of combined[0]
 
-        // Defer so the "Parsing…" frame paints before the work starts
-        setTimeout(function() {
-            self.parseContentWithProgress(content, function(emails) {
-                if (emails.length === 0) {
-                    self.showError('No emails found in this file. Please check if it\'s a valid mbox format.');
-                    return;
-                }
-                self.populateLabelFilter(self.parser.collectLabels());
-                self.displayEmailList();
-                self.updateStats();
-                self.hideLoading();
-            });
-        }, 50);
-    };
+            // message start positions within `combined`. combined[0] is a message
+            // start whenever it begins with "From " — that's true for the first
+            // slice (file starts with "From ") and for every carried partial
+            // message thereafter (carry always begins at a boundary). Without
+            // this, a message whose start was consumed in a previous slice would
+            // be dropped when the next boundary arrived.
+            var starts = [];
+            if (combined.indexOf('From ') === 0) {
+                starts.push(0);
+            }
+            var idx = combined.indexOf('\nFrom ');
+            while (idx !== -1) {
+                starts.push(idx + 1);
+                idx = combined.indexOf('\nFrom ', idx + 1);
+            }
 
-    reader.onerror = function() {
-        self.showError('Failed to read file. Please try again.');
-    };
+            // all but the last start are complete; the last is carried forward
+            for (var k = 0; k + 1 < starts.length; k++) {
+                onMessage(combined.substring(starts[k], starts[k + 1]), base + starts[k], starts[k + 1] - starts[k]);
+            }
+            if (starts.length > 0) {
+                var last = starts[starts.length - 1];
+                carry = combined.substring(last);
+                carryOffset = base + last;
+            } else {
+                carry = combined; // no boundary yet — keep accumulating
+            }
 
-    try {
-        reader.readAsArrayBuffer(file);
-    } catch (error) {
-        self.showError('Cannot read file: ' + error.message);
+            fileOffset = end;
+            if (onProgress) {
+                onProgress(file.size ? fileOffset / file.size : 1);
+            }
+            setTimeout(readNext, 0);
+        };
+        reader.onerror = function() {
+            self.showError('Failed to read the file. Please try again.');
+        };
+        reader.readAsArrayBuffer(file.slice(fileOffset, end));
     }
+
+    readNext();
 };
 
-// Parse the mbox content in yielding batches so the UI can paint progress
-// (the second 0..100% sweep of the bar) instead of freezing on a big file.
-MboxViewer.prototype.parseContentWithProgress = function(content, onComplete) {
+// Build the in-memory index: one lightweight entry per message (metadata + byte
+// offset/length), parsing headers only. Drops Trash-labeled emails.
+MboxViewer.prototype.buildIndex = function(file, onComplete) {
     var self = this;
     var parser = this.parser;
-    parser.emails = [];
+    this.index = [];
 
-    var messages = parser.splitMessages(content);
-    var total = messages.length;
-    var i = 0;
-    var batchSize = 300;
+    this.streamMessages(file, function(text, offset, length) {
+        if (text.indexOf('From ') !== 0) return;
+        var f = parser.parseHeaderFields(parser.extractHeaderBlock(text));
+        if (parser.hasTrashLabel(f.gmailLabels)) return;
+        self.index.push({
+            offset: offset,
+            length: length,
+            from: f.from,
+            to: f.to,
+            subject: f.subject,
+            date: f.date,
+            dateValue: f.dateValue,
+            messageId: f.messageId,
+            gmailLabels: f.gmailLabels
+        });
+    }, function(fraction) {
+        self.updateProgress(fraction, 'Indexing… ' + self.index.length + ' emails');
+    }, function() {
+        onComplete(self.index);
+    });
+};
 
-    function step() {
-        try {
-            var end = Math.min(i + batchSize, total);
-            for (; i < end; i++) {
-                var email = parser.parseEmail(messages[i]);
-                if (email) {
-                    parser.emails.push(email);
-                }
+// Distinct, sorted Gmail labels across the index, for the label dropdown.
+MboxViewer.prototype.collectIndexLabels = function() {
+    var seen = {};
+    var labels = [];
+    for (var i = 0; i < this.index.length; i++) {
+        var ls = this.index[i].gmailLabels;
+        if (!ls) continue;
+        for (var j = 0; j < ls.length; j++) {
+            var key = ls[j].toLowerCase();
+            if (!seen[key]) {
+                seen[key] = true;
+                labels.push(ls[j]);
             }
-        } catch (parseError) {
-            self.showError('Error parsing emails: ' + parseError.message);
-            return;
-        }
-
-        self.updateProgress(total ? i / total : 1, 'Parsing emails… ' + i + ' / ' + total);
-
-        if (i < total) {
-            setTimeout(step, 0);
-        } else {
-            parser.filteredEmails = parser.emails.slice();
-            onComplete(parser.emails);
         }
     }
-
-    step();
+    labels.sort();
+    return labels;
 };
 
-MboxViewer.prototype.processLargeFileChunked = function(file) {
+// Read and fully parse a single email's bytes on demand, with a small LRU cache
+// so re-clicks / raw-toggle / download don't re-read the slice.
+MboxViewer.prototype.loadEmail = function(entry, callback) {
     var self = this;
-    
-    // Store file info for chunk-based viewing
-    this.file = file;
-    this.chunkSize = 5 * 1024 * 1024; // 5MB chunks
-    this.totalChunks = Math.ceil(file.size / this.chunkSize);
-    this.currentChunkIndex = 0;
-    this.chunkEmails = []; // Store emails by chunk
-    this.processedChunks = {}; // Cache processed chunks
-    
-    console.log('File has', this.totalChunks, 'chunks of', this.formatFileSize(this.chunkSize), 'each');
-    
-    // Show chunk navigation instead of processing all at once
-    this.showChunkNavigation();
-    this.loadChunk(0);
-};
-
-MboxViewer.prototype.showChunkNavigation = function() {
-    var navHtml = '<div class="chunk-navigation">' +
-        '<button id="prevChunk" disabled>◀ Previous Chunk</button>' +
-        '<span id="chunkInfo">Chunk 1 of ' + this.totalChunks + '</span>' +
-        '<button id="nextChunk">Next Chunk ▶</button>' +
-        '</div>';
-    
-    this.emailList.innerHTML = navHtml + '<div id="chunkEmails"></div>';
-    
-    var self = this;
-    document.getElementById('prevChunk').addEventListener('click', function() {
-        if (self.currentChunkIndex > 0) {
-            self.loadChunk(self.currentChunkIndex - 1);
-        }
-    });
-    
-    document.getElementById('nextChunk').addEventListener('click', function() {
-        if (self.currentChunkIndex < self.totalChunks - 1) {
-            self.loadChunk(self.currentChunkIndex + 1);
-        }
-    });
-};
-
-MboxViewer.prototype.loadChunk = function(chunkIndex) {
-    var self = this;
-    this.currentChunkIndex = chunkIndex;
-    
-    // Update navigation
-    document.getElementById('chunkInfo').textContent = 'Chunk ' + (chunkIndex + 1) + ' of ' + this.totalChunks;
-    document.getElementById('prevChunk').disabled = (chunkIndex === 0);
-    document.getElementById('nextChunk').disabled = (chunkIndex === this.totalChunks - 1);
-    
-    // Check if chunk is already processed
-    if (this.processedChunks[chunkIndex]) {
-        console.log('Loading cached chunk', chunkIndex + 1);
-        this.displayChunkEmails(this.processedChunks[chunkIndex]);
+    if (this.viewCache && this.viewCache[entry.offset]) {
+        callback(this.viewCache[entry.offset]);
         return;
     }
-    
-    // Load and process chunk
-    console.log('Processing chunk', chunkIndex + 1, 'of', this.totalChunks);
-    this.showChunkLoading('Loading chunk ' + (chunkIndex + 1) + '...');
-    
-    var offset = chunkIndex * this.chunkSize;
-    var end = Math.min(offset + this.chunkSize, this.file.size);
-    var slice = this.file.slice(offset, end);
-    
     var reader = new FileReader();
     reader.onload = function(e) {
-        var chunkText = self.bufferToBinaryString(e.target.result);
-        var emails = self.parseChunkEmails(chunkText);
-
-        // Cache the processed chunk
-        self.processedChunks[chunkIndex] = emails;
-        
-        console.log('Chunk', chunkIndex + 1, 'contains', emails.length, 'emails');
-        self.displayChunkEmails(emails);
+        var email = self.parser.parseEmail(self.bufferToBinaryString(e.target.result));
+        self.cacheEmail(entry.offset, email);
+        callback(email);
     };
-    
     reader.onerror = function() {
-        self.showChunkError('Failed to load chunk ' + (chunkIndex + 1));
+        self.showError('Failed to read the selected email.');
     };
-
-    reader.readAsArrayBuffer(slice);
+    reader.readAsArrayBuffer(this.file.slice(entry.offset, entry.offset + entry.length));
 };
 
-MboxViewer.prototype.parseChunkEmails = function(chunkText) {
-    var emails = [];
-    var messages = chunkText.split(/^From /m);
-    
-    for (var i = 1; i < messages.length; i++) {
-        var message = 'From ' + messages[i];
-        var email = this.parser.parseEmail(message);
-        if (email) {
-            // Filter out emails in Trash
-            if (email.gmailLabels && email.gmailLabels.length > 0) {
-                var hasTrash = false;
-                for (var j = 0; j < email.gmailLabels.length; j++) {
-                    if (email.gmailLabels[j].toLowerCase() === 'trash') {
-                        hasTrash = true;
-                        break;
-                    }
-                }
-                if (!hasTrash) {
-                    emails.push(email);
-                }
-            } else {
-                // Include emails without labels (they're probably not in trash)
-                emails.push(email);
-            }
-        }
+MboxViewer.prototype.cacheEmail = function(offset, email) {
+    if (!this.viewCache) { this.viewCache = {}; this.viewOrder = []; }
+    if (!this.viewCache[offset]) this.viewOrder.push(offset);
+    this.viewCache[offset] = email;
+    while (this.viewOrder.length > 20) {
+        delete this.viewCache[this.viewOrder.shift()];
     }
-    
-    return emails;
 };
 
-MboxViewer.prototype.displayChunkEmails = function(emails) {
-    var chunkEmailsDiv = document.getElementById('chunkEmails');
-    
-    if (emails.length === 0) {
-        chunkEmailsDiv.innerHTML = '<div class="no-file-message">No complete emails found in this chunk</div>';
+MboxViewer.prototype.listItemHtml = function(entry, position) {
+    var labelsHtml = '';
+    if (entry.gmailLabels && entry.gmailLabels.length > 0) {
+        labelsHtml = '<div class="email-labels">';
+        for (var j = 0; j < entry.gmailLabels.length; j++) {
+            labelsHtml += '<span class="gmail-label">' + this.escapeHtml(entry.gmailLabels[j]) + '</span>';
+        }
+        labelsHtml += '</div>';
+    }
+    return '<div class="email-item" data-index="' + position + '">' +
+        '<div class="email-from">' + this.escapeHtml(entry.from || 'Unknown sender') + '</div>' +
+        '<div class="email-subject">' + this.escapeHtml(entry.subject || '(No subject)') + '</div>' +
+        '<div class="email-date">' + this.escapeHtml(entry.date || 'No date') + '</div>' +
+        labelsHtml +
+        '</div>';
+};
+
+// Render the current filtered index (first 1000 + Load More).
+MboxViewer.prototype.renderList = function() {
+    var entries = this.filtered || [];
+    if (entries.length === 0) {
+        this.emailList.innerHTML = '<div class="no-file-message">No emails found</div>';
         return;
     }
-    
-    var emailItems = [];
-    for (var i = 0; i < emails.length; i++) {
-        var email = emails[i];
-        var date = email.date || 'No date';
-        var from = email.from || 'Unknown sender';
-        var subject = email.subject || '(No subject)';
-        
-        // Add Gmail labels if available
-        var labelsHtml = '';
-        if (email.gmailLabels && email.gmailLabels.length > 0) {
-            labelsHtml = '<div class="email-labels">';
-            for (var j = 0; j < email.gmailLabels.length; j++) {
-                labelsHtml += '<span class="gmail-label">' + this.escapeHtml(email.gmailLabels[j]) + '</span>';
-            }
-            labelsHtml += '</div>';
-        }
-        
-        emailItems.push('<div class="email-item" data-index="' + i + '">' +
-            '<div class="email-from">' + this.escapeHtml(from) + '</div>' +
-            '<div class="email-subject">' + this.escapeHtml(subject) + '</div>' +
-            '<div class="email-date">' + this.escapeHtml(date) + '</div>' +
-            labelsHtml +
-            '</div>');
+
+    var maxInitial = 1000;
+    var show = Math.min(entries.length, maxInitial);
+    var items = [];
+    for (var i = 0; i < show; i++) {
+        items.push(this.listItemHtml(entries[i], i));
     }
-    
-    chunkEmailsDiv.innerHTML = emailItems.join('');
-    
-    // Add click handlers
+    if (entries.length > maxInitial) {
+        items.push('<div class="load-more-btn" id="loadMoreBtn">Load More (' + (entries.length - maxInitial) + ' remaining)</div>');
+    }
+    this.emailList.innerHTML = items.join('');
+
+    this.wireListItems();
     var self = this;
-    var emailElements = chunkEmailsDiv.querySelectorAll('.email-item');
-    console.log('Adding click handlers to', emailElements.length, 'email elements');
-    
-    for (var i = 0; i < emailElements.length; i++) {
-        (function(index, element) {
-            element.addEventListener('click', function() {
-                self.selectEmail(emails[index], element);
-            });
-        })(i, emailElements[i]);
+    var more = document.getElementById('loadMoreBtn');
+    if (more) {
+        more.addEventListener('click', function() { self.loadMore(); });
     }
-    
-    // Update stats
-    this.stats.textContent = 'Chunk ' + (this.currentChunkIndex + 1) + ': ' + emails.length + ' emails';
 };
 
-MboxViewer.prototype.showChunkLoading = function(message) {
-    var chunkEmailsDiv = document.getElementById('chunkEmails');
-    chunkEmailsDiv.innerHTML = '<div class="loading">' + message + '</div>';
+MboxViewer.prototype.loadMore = function() {
+    var entries = this.filtered || [];
+    var shown = this.emailList.querySelectorAll('.email-item').length;
+    var next = Math.min(1000, entries.length - shown);
+
+    var items = [];
+    for (var i = shown; i < shown + next; i++) {
+        items.push(this.listItemHtml(entries[i], i));
+    }
+
+    var oldMore = document.getElementById('loadMoreBtn');
+    if (oldMore) oldMore.remove();
+    if (shown + next < entries.length) {
+        items.push('<div class="load-more-btn" id="loadMoreBtn">Load More (' + (entries.length - shown - next) + ' remaining)</div>');
+    }
+    this.emailList.insertAdjacentHTML('beforeend', items.join(''));
+
+    this.wireListItems();
+    var self = this;
+    var more = document.getElementById('loadMoreBtn');
+    if (more) {
+        more.addEventListener('click', function() { self.loadMore(); });
+    }
 };
 
-MboxViewer.prototype.showChunkError = function(message) {
-    var chunkEmailsDiv = document.getElementById('chunkEmails');
-    chunkEmailsDiv.innerHTML = '<div class="error">' + message + '</div>';
+// Attach click handlers to any list rows that don't have one yet.
+MboxViewer.prototype.wireListItems = function() {
+    var self = this;
+    var rows = this.emailList.querySelectorAll('.email-item:not(.has-handler)');
+    for (var i = 0; i < rows.length; i++) {
+        (function(row) {
+            row.classList.add('has-handler');
+            row.addEventListener('click', function() {
+                self.openEmail(parseInt(row.getAttribute('data-index'), 10), row);
+            });
+        })(rows[i]);
+    }
+};
+
+// Load (lazily) and show the email at a position in the filtered index.
+MboxViewer.prototype.openEmail = function(position, element) {
+    var entry = this.filtered[position];
+    if (!entry) return;
+    var self = this;
+    this.loadEmail(entry, function(email) {
+        self.selectEmail(email, element);
+    });
+};
+
+// Filter the index by metadata criteria (no body). Used when there's no
+// free-text term — instant, since everything needed is in the index entries.
+MboxViewer.prototype.filterIndex = function(criteria) {
+    var out = [];
+    for (var i = 0; i < this.index.length; i++) {
+        if (this.parser.matchesCriteria(this.index[i], criteria)) {
+            out.push(this.index[i]);
+        }
+    }
+    return out;
 };
 
 // Read the free-text search box plus the advanced filter controls into one
@@ -996,15 +967,6 @@ MboxViewer.prototype.gatherCriteria = function() {
 
 MboxViewer.prototype.hasCriteria = function(c) {
     return !!(c.text || c.sender || c.label || c.dateFrom != null || c.dateTo != null);
-};
-
-MboxViewer.prototype.describeCriteria = function(c) {
-    var parts = [];
-    if (c.text) parts.push('text "' + c.text + '"');
-    if (c.sender) parts.push('from "' + c.sender + '"');
-    if (c.label) parts.push('label "' + c.label + '"');
-    if (c.dateFrom != null || c.dateTo != null) parts.push('date range');
-    return parts.join(', ');
 };
 
 MboxViewer.prototype.resetFilterInputs = function() {
@@ -1031,179 +993,60 @@ MboxViewer.prototype.populateLabelFilter = function(labels) {
 
 MboxViewer.prototype.performSearch = function() {
     var criteria = this.gatherCriteria();
-
     if (!this.hasCriteria(criteria)) {
         this.showError('Enter a search term or set a filter');
         return;
     }
+    if (!this.index) return;
 
-    // Small-file mode: every email is already parsed in memory, so filter directly
-    if (!this.file) {
-        this.parser.applyFilters(criteria);
-        this.displayEmailList();
+    var self = this;
+    if (criteria.text) {
+        // Free-text search needs message bodies → stream-scan the file once.
+        this.showLoading('Searching…');
+        var results = [];
+        this.streamMessages(this.file, function(text, offset, length) {
+            if (text.indexOf('From ') !== 0) return;
+            var email = self.parser.parseEmail(text);
+            if (self.parser.hasTrashLabel(email.gmailLabels)) return;
+            if (self.parser.matchesCriteria(email, criteria)) {
+                results.push({
+                    offset: offset, length: length,
+                    from: email.from, to: email.to, subject: email.subject,
+                    date: email.date, dateValue: email.dateValue,
+                    messageId: email.messageId, gmailLabels: email.gmailLabels
+                });
+            }
+        }, function(fraction) {
+            self.updateProgress(fraction, 'Searching… ' + results.length + ' matches');
+        }, function() {
+            self.filtered = results;
+            self.renderList();
+            self.updateStats();
+            self.hideLoading();
+            if (self.emailViewer) {
+                self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the results</div>';
+            }
+        });
+    } else {
+        // Metadata-only filter (sender / label / date) → instant over the index.
+        this.filtered = this.filterIndex(criteria);
+        this.renderList();
         this.updateStats();
         if (this.emailViewer) {
             this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the results</div>';
         }
-        return;
     }
-
-    // Chunked mode: scan every chunk applying the same criteria
-    this.criteria = criteria;
-    this.searchResults = [];
-    this.currentSearchChunk = 0;
-    this.isSearchMode = true;
-    this.showSearchInterface();
-    this.searchNextChunk();
 };
 
 MboxViewer.prototype.clearSearch = function() {
     this.searchInput.value = '';
     this.resetFilterInputs();
-
-    // Small-file mode: reset the in-memory filter and re-render the full list
-    if (!this.file) {
-        this.parser.applyFilters({});
-        this.displayEmailList();
-        this.updateStats();
-        if (this.emailViewer) {
-            this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
-        }
-        return;
-    }
-
-    this.isSearchMode = false;
-    this.searchResults = [];
-    this.criteria = null;
-
-    // Return to normal chunk view
-    this.showChunkNavigation();
-    this.loadChunk(0);
-};
-
-MboxViewer.prototype.showSearchInterface = function() {
-    var searchHtml = '<div class="search-progress">' +
-        '<div class="search-header">Results for: ' + this.escapeHtml(this.describeCriteria(this.criteria || {}) || 'all emails') + '</div>' +
-        '<div class="search-status" id="searchStatus">Searching...</div>' +
-        '<button id="cancelSearch">Cancel Search</button>' +
-        '</div>' +
-        '<div id="searchResults"></div>';
-    
-    this.emailList.innerHTML = searchHtml;
-    
-    var self = this;
-    document.getElementById('cancelSearch').addEventListener('click', function() {
-        self.clearSearch();
-    });
-};
-
-MboxViewer.prototype.searchNextChunk = function() {
-    if (this.currentSearchChunk >= this.totalChunks) {
-        this.displaySearchResults();
-        return;
-    }
-    
-    var self = this;
-    var chunkIndex = this.currentSearchChunk;
-    
-    // Update progress
-    document.getElementById('searchStatus').textContent = 
-        'Searching chunk ' + (chunkIndex + 1) + ' of ' + this.totalChunks + 
-        ' (' + this.searchResults.length + ' results found)';
-    
-    // Load and search chunk
-    var offset = chunkIndex * this.chunkSize;
-    var end = Math.min(offset + this.chunkSize, this.file.size);
-    var slice = this.file.slice(offset, end);
-    
-    var reader = new FileReader();
-    reader.onload = function(e) {
-        var chunkText = self.bufferToBinaryString(e.target.result);
-        var emails = self.parseChunkEmails(chunkText);
-
-        // Search through emails in this chunk
-        for (var i = 0; i < emails.length; i++) {
-            var email = emails[i];
-            if (self.emailMatchesSearch(email)) {
-                self.searchResults.push({
-                    email: email,
-                    chunkIndex: chunkIndex,
-                    emailIndex: i
-                });
-            }
-        }
-        
-        self.currentSearchChunk++;
-        
-        // Continue searching with a small delay
-        setTimeout(function() {
-            self.searchNextChunk();
-        }, 10);
-    };
-    
-    reader.onerror = function() {
-        self.showError('Error searching chunk ' + (chunkIndex + 1));
-    };
-
-    reader.readAsArrayBuffer(slice);
-};
-
-MboxViewer.prototype.emailMatchesSearch = function(email) {
-    return this.parser.matchesCriteria(email, this.criteria || {});
-};
-
-MboxViewer.prototype.displaySearchResults = function() {
-    var searchResultsDiv = document.getElementById('searchResults');
-    document.getElementById('searchStatus').textContent = 
-        'Search complete: ' + this.searchResults.length + ' results found';
-    
-    if (this.searchResults.length === 0) {
-        searchResultsDiv.innerHTML = '<div class="no-file-message">No emails found matching your search</div>';
-        return;
-    }
-    
-    var resultItems = [];
-    for (var i = 0; i < this.searchResults.length; i++) {
-        var result = this.searchResults[i];
-        var email = result.email;
-        var date = email.date || 'No date';
-        var from = email.from || 'Unknown sender';
-        var subject = email.subject || '(No subject)';
-        
-        // Add Gmail labels if available
-        var labelsHtml = '';
-        if (email.gmailLabels && email.gmailLabels.length > 0) {
-            labelsHtml = '<div class="email-labels">';
-            for (var j = 0; j < email.gmailLabels.length; j++) {
-                labelsHtml += '<span class="gmail-label">' + this.escapeHtml(email.gmailLabels[j]) + '</span>';
-            }
-            labelsHtml += '</div>';
-        }
-        
-        resultItems.push('<div class="email-item search-result" data-result-index="' + i + '">' +
-            '<div class="search-result-header">' +
-                '<span class="chunk-indicator">Chunk ' + (result.chunkIndex + 1) + '</span>' +
-            '</div>' +
-            '<div class="email-from">' + this.escapeHtml(from) + '</div>' +
-            '<div class="email-subject">' + this.escapeHtml(subject) + '</div>' +
-            '<div class="email-date">' + this.escapeHtml(date) + '</div>' +
-            labelsHtml +
-            '</div>');
-    }
-    
-    searchResultsDiv.innerHTML = resultItems.join('');
-    
-    // Add click handlers for search results
-    var self = this;
-    var resultElements = searchResultsDiv.querySelectorAll('.search-result');
-    for (var i = 0; i < resultElements.length; i++) {
-        (function(index, element) {
-            element.addEventListener('click', function() {
-                var result = self.searchResults[index];
-                console.log('Search result clicked:', result);
-                self.selectEmail(result.email, element);
-            });
-        })(i, resultElements[i]);
+    if (!this.index) return;
+    this.filtered = this.index.slice();
+    this.renderList();
+    this.updateStats();
+    if (this.emailViewer) {
+        this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
     }
 };
 
@@ -1430,139 +1273,8 @@ MboxViewer.prototype.downloadAttachment = function(attachment) {
     }
 };
 
-MboxViewer.prototype.displayEmailList = function() {
-    var emails = this.parser.getFilteredEmails();
-    
-    console.log('displayEmailList called with', emails.length, 'emails');
-    
-    if (emails.length === 0) {
-        this.emailList.innerHTML = '<div class="no-file-message">No emails found</div>';
-        return;
-    }
-
-    // For large numbers of emails, show the first 1000 initially
-    var maxInitialDisplay = 1000;
-    var emailsToShow = Math.min(emails.length, maxInitialDisplay);
-    
-    console.log('Displaying first', emailsToShow, 'emails out of', emails.length);
-
-    var emailItems = [];
-    for (var i = 0; i < emailsToShow; i++) {
-        var email = emails[i];
-        var date = email.date || 'No date';
-        var from = email.from || 'Unknown sender';
-        var subject = email.subject || '(No subject)';
-        
-        emailItems.push('<div class="email-item" data-index="' + i + '">' +
-            '<div class="email-from">' + this.escapeHtml(from) + '</div>' +
-            '<div class="email-subject">' + this.escapeHtml(subject) + '</div>' +
-            '<div class="email-date">' + this.escapeHtml(date) + '</div>' +
-            '</div>');
-    }
-
-    // Add load more button if there are more emails
-    if (emails.length > maxInitialDisplay) {
-        emailItems.push('<div class="load-more-btn" id="loadMoreBtn">Load More (' + (emails.length - maxInitialDisplay) + ' remaining)</div>');
-    }
-
-    try {
-        this.emailList.innerHTML = emailItems.join('');
-        console.log('Successfully set innerHTML');
-    } catch (error) {
-        console.error('Error setting innerHTML:', error);
-        this.showError('Error displaying emails: ' + error.message);
-        return;
-    }
-
-    var self = this;
-    
-    // Add click handlers for email items
-    var emailElements = this.emailList.querySelectorAll('.email-item');
-    console.log('Adding click handlers to', emailElements.length, 'email elements');
-    
-    for (var i = 0; i < emailElements.length; i++) {
-        (function(index, element) {
-            element.addEventListener('click', function() {
-                self.selectEmail(self.parser.getFilteredEmails()[index], element);
-            });
-        })(i, emailElements[i]);
-    }
-
-    // Add load more handler
-    var loadMoreBtn = document.getElementById('loadMoreBtn');
-    if (loadMoreBtn) {
-        loadMoreBtn.addEventListener('click', function() {
-            console.log('Load more clicked');
-            self.loadMoreEmails();
-        });
-    }
-    
-    console.log('displayEmailList completed successfully');
-};
-
-MboxViewer.prototype.loadMoreEmails = function() {
-    console.log('loadMoreEmails called');
-    var emails = this.parser.getFilteredEmails();
-    var currentlyShown = this.emailList.querySelectorAll('.email-item').length;
-    var nextBatch = Math.min(1000, emails.length - currentlyShown);
-    
-    console.log('Loading', nextBatch, 'more emails, starting from index', currentlyShown);
-    
-    var emailItems = [];
-    for (var i = currentlyShown; i < currentlyShown + nextBatch; i++) {
-        var email = emails[i];
-        var date = email.date || 'No date';
-        var from = email.from || 'Unknown sender';
-        var subject = email.subject || '(No subject)';
-        
-        emailItems.push('<div class="email-item" data-index="' + i + '">' +
-            '<div class="email-from">' + this.escapeHtml(from) + '</div>' +
-            '<div class="email-subject">' + this.escapeHtml(subject) + '</div>' +
-            '<div class="email-date">' + this.escapeHtml(date) + '</div>' +
-            '</div>');
-    }
-    
-    // Remove old load more button
-    var oldLoadMoreBtn = document.getElementById('loadMoreBtn');
-    if (oldLoadMoreBtn) {
-        oldLoadMoreBtn.remove();
-    }
-    
-    // Add new load more button if needed
-    if (currentlyShown + nextBatch < emails.length) {
-        emailItems.push('<div class="load-more-btn" id="loadMoreBtn">Load More (' + (emails.length - currentlyShown - nextBatch) + ' remaining)</div>');
-    }
-    
-    // Append new items
-    this.emailList.insertAdjacentHTML('beforeend', emailItems.join(''));
-    
-    // Add click handlers for new items
-    var self = this;
-    var newEmailElements = this.emailList.querySelectorAll('.email-item[data-index]:not(.has-handler)');
-    for (var i = 0; i < newEmailElements.length; i++) {
-        (function(element) {
-            var index = parseInt(element.getAttribute('data-index'));
-            element.classList.add('has-handler');
-            element.addEventListener('click', function() {
-                self.selectEmail(self.parser.getFilteredEmails()[index], element);
-            });
-        })(newEmailElements[i]);
-    }
-    
-    // Re-add load more handler
-    var newLoadMoreBtn = document.getElementById('loadMoreBtn');
-    if (newLoadMoreBtn) {
-        newLoadMoreBtn.addEventListener('click', function() {
-            console.log('Load more clicked again');
-            self.loadMoreEmails();
-        });
-    }
-    
-    console.log('loadMoreEmails completed');
-};
-
-// Show an email in the viewer and highlight its row. The single selection
-// operation shared by every list/chunk/search click handler and keyboard nav.
+// Show an email in the viewer and highlight its row. Shared by row clicks and
+// keyboard navigation.
 MboxViewer.prototype.selectEmail = function(email, element) {
     this.displayEmail(email);
     this.highlightSelectedEmail(element);
@@ -1577,19 +1289,15 @@ MboxViewer.prototype.highlightSelectedEmail = function(selectedItem) {
 };
 
 MboxViewer.prototype.updateStats = function() {
-    var total = this.parser.getEmailCount();
-    var filtered = this.parser.getFilteredEmailCount();
-    
-    if (total === 0) {
+    if (!this.index || this.index.length === 0) {
         this.stats.textContent = '';
         return;
     }
-
-    if (filtered === total) {
-        this.stats.textContent = 'Total emails: ' + total;
-    } else {
-        this.stats.textContent = 'Showing ' + filtered + ' of ' + total + ' emails';
-    }
+    var total = this.index.length;
+    var shown = this.filtered ? this.filtered.length : total;
+    this.stats.textContent = (shown === total)
+        ? ('Total emails: ' + total)
+        : ('Showing ' + shown + ' of ' + total + ' emails');
 };
 
 MboxViewer.prototype.showLoading = function(message) {
@@ -1617,7 +1325,7 @@ MboxViewer.prototype.updateProgress = function(fraction, message) {
 };
 
 MboxViewer.prototype.hideLoading = function() {
-    // Loading will be hidden when displayEmailList is called
+    // Loading is replaced when renderList paints the list
 };
 
 MboxViewer.prototype.showError = function(message) {
