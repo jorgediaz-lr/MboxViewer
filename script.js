@@ -711,19 +711,27 @@ MboxViewer.prototype.processSmallFile = function(file) {
     var self = this;
     var reader = new FileReader();
 
+    // Reading the file is the first 0..100% sweep of the progress bar
+    reader.onprogress = function(e) {
+        if (e.lengthComputable) {
+            self.updateProgress(e.loaded / e.total,
+                'Reading file… ' + Math.round((e.loaded / e.total) * 100) + '%');
+        }
+    };
+
     reader.onload = function(e) {
+        // Reset to 0 for the second sweep (parsing)
+        self.updateProgress(0, 'Parsing emails…');
         var content = self.bufferToBinaryString(e.target.result);
 
         if (!content || (!content.indexOf || (content.indexOf('From ') === -1 && content.indexOf('Message-ID:') === -1))) {
             self.showError('This does not appear to be a valid mbox file');
             return;
         }
-        
-        self.showLoading('Parsing emails...');
-        
+
+        // Defer so the "Parsing…" frame paints before the work starts
         setTimeout(function() {
-            try {
-                var emails = self.parser.parseMboxFile(content);
+            self.parseContentWithProgress(content, function(emails) {
                 if (emails.length === 0) {
                     self.showError('No emails found in this file. Please check if it\'s a valid mbox format.');
                     return;
@@ -732,21 +740,60 @@ MboxViewer.prototype.processSmallFile = function(file) {
                 self.displayEmailList();
                 self.updateStats();
                 self.hideLoading();
-            } catch (parseError) {
-                self.showError('Error parsing emails: ' + parseError.message);
-            }
-        }, 100);
+            });
+        }, 50);
     };
-    
+
     reader.onerror = function() {
         self.showError('Failed to read file. Please try again.');
     };
-    
+
     try {
         reader.readAsArrayBuffer(file);
     } catch (error) {
         self.showError('Cannot read file: ' + error.message);
     }
+};
+
+// Parse the mbox content in yielding batches so the UI can paint progress
+// (the second 0..100% sweep of the bar) instead of freezing on a big file.
+MboxViewer.prototype.parseContentWithProgress = function(content, onComplete) {
+    var self = this;
+    var parser = this.parser;
+    parser.emails = [];
+
+    var messages = content.split(/^From /m);
+    var total = messages.length - 1; // index 0 is the preamble before the first "From "
+    var i = 1;
+    var batchSize = 300;
+
+    function step() {
+        try {
+            var end = Math.min(i + batchSize, messages.length);
+            for (; i < end; i++) {
+                var email = parser.parseEmail('From ' + messages[i]);
+                if (email) {
+                    parser.emails.push(email);
+                }
+            }
+        } catch (parseError) {
+            self.showError('Error parsing emails: ' + parseError.message);
+            return;
+        }
+
+        var done = i - 1;
+        self.updateProgress(total ? done / total : 1,
+            'Parsing emails… ' + done + ' / ' + total);
+
+        if (i < messages.length) {
+            setTimeout(step, 0);
+        } else {
+            parser.filteredEmails = parser.emails.slice();
+            onComplete(parser.emails);
+        }
+    }
+
+    step();
 };
 
 MboxViewer.prototype.processLargeFileChunked = function(file) {
@@ -1544,8 +1591,27 @@ MboxViewer.prototype.updateStats = function() {
 };
 
 MboxViewer.prototype.showLoading = function(message) {
-    this.emailList.innerHTML = '<div class="loading">' + message + '</div>';
+    this.emailList.innerHTML =
+        '<div class="loading">' +
+            '<div class="loading-message" id="loadingMessage">' + this.escapeHtml(message) + '</div>' +
+            '<div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>' +
+        '</div>';
     this.emailViewer.innerHTML = '<div class="no-email-selected">Loading...</div>';
+};
+
+// Update the loading progress bar (fraction 0..1) and optional message.
+MboxViewer.prototype.updateProgress = function(fraction, message) {
+    var fill = document.getElementById('progressFill');
+    if (fill) {
+        var pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+        fill.style.width = pct + '%';
+    }
+    if (message) {
+        var label = document.getElementById('loadingMessage');
+        if (label) {
+            label.textContent = message;
+        }
+    }
 };
 
 MboxViewer.prototype.hideLoading = function() {
