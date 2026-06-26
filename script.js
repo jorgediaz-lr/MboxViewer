@@ -131,15 +131,14 @@ MboxParser.prototype.decodeHeader = function(header) {
             return header.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, function(match, charset, encoding, data) {
                 try {
                     if (encoding.toLowerCase() === 'b') {
-                        // Base64 decode
-                        var decoded = atob(data);
-                        return this.decodeUtf8(decoded);
+                        // Base64 -> bytes -> charset
+                        return this.decodeBytes(atob(data), charset);
                     } else if (encoding.toLowerCase() === 'q') {
-                        // Quoted-printable decode
+                        // Quoted-printable -> bytes -> charset ('_' means space)
                         var decoded = data.replace(/[=]([0-9A-F]{2})/gi, function(m, hex) {
                             return String.fromCharCode(parseInt(hex, 16));
                         }).replace(/_/g, ' ');
-                        return this.decodeUtf8(decoded);
+                        return this.decodeBytes(decoded, charset);
                     }
                 } catch (e) {
                     console.log('Error decoding header part:', match, e);
@@ -177,6 +176,26 @@ MboxParser.prototype.decodeUtf8 = function(str) {
     }
 };
 
+// Decode a raw byte string (chars 0-255) using the declared charset. Uses the
+// browser's TextDecoder, which covers the WHATWG encodings (utf-8, iso-8859-*,
+// windows-125*, shift_jis, euc-jp/kr, gb18030, big5, koi8-*, ...). Falls back
+// to UTF-8 for unknown labels, and to decodeUtf8 where TextDecoder is missing.
+MboxParser.prototype.decodeBytes = function(binary, charset) {
+    charset = (charset || 'utf-8').toLowerCase().replace(/^\s+|\s+$/g, '');
+    if (typeof TextDecoder !== 'undefined') {
+        try {
+            return new TextDecoder(charset).decode(this.stringToBytes(binary));
+        } catch (e) {
+            try {
+                return new TextDecoder('utf-8').decode(this.stringToBytes(binary));
+            } catch (e2) {
+                // fall through
+            }
+        }
+    }
+    return this.decodeUtf8(binary);
+};
+
 MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body) {
     contentType = contentType || 'text/plain';
     var lowerType = contentType.toLowerCase();
@@ -190,8 +209,8 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
                 this.parseMimePartString(email, parts[i]);
             }
         } else {
-            // Malformed multipart without a boundary - keep the raw text
-            email.bodyText += body;
+            // Malformed multipart without a boundary - decode the raw bytes as text
+            email.bodyText += this.decodeBytes(body, this.getMimeParameter(contentType, 'charset'));
         }
         return;
     }
@@ -215,7 +234,8 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
         return;
     }
 
-    var decoded = this.decodeTransferEncoding(body, transferEncoding);
+    var charset = this.getMimeParameter(contentType, 'charset');
+    var decoded = this.decodeTransferEncoding(body, transferEncoding, charset);
     if (lowerType.indexOf('text/html') !== -1) {
         email.bodyHtml += decoded;
     } else {
@@ -334,27 +354,24 @@ MboxParser.prototype.stringToBytes = function(binary) {
     return bytes;
 };
 
-MboxParser.prototype.decodeTransferEncoding = function(content, encoding) {
+MboxParser.prototype.decodeTransferEncoding = function(content, encoding, charset) {
     encoding = (encoding || '').toLowerCase().replace(/^\s+|\s+$/g, '');
 
     if (encoding.indexOf('base64') !== -1) {
-        return this.decodeBase64Text(content);
+        try {
+            return this.decodeBytes(atob(this.cleanBase64(content)), charset);
+        } catch (e) {
+            return content;
+        }
     }
 
     if (encoding.indexOf('quoted-printable') !== -1) {
-        return this.decodeUtf8(this.decodeQuotedPrintable(content));
+        return this.decodeBytes(this.decodeQuotedPrintable(content), charset);
     }
 
-    // 7bit / 8bit / binary: FileReader already decoded the bytes as UTF-8
-    return content;
-};
-
-MboxParser.prototype.decodeBase64Text = function(data) {
-    try {
-        return this.decodeUtf8(atob(this.cleanBase64(data)));
-    } catch (e) {
-        return data;
-    }
+    // 7bit / 8bit / binary: content is the raw bytes (read verbatim), so decode
+    // them with the part's declared charset.
+    return this.decodeBytes(content, charset);
 };
 
 MboxParser.prototype.estimateDecodedSize = function(data, encoding) {
@@ -559,13 +576,26 @@ MboxViewer.prototype.processFile = function(file) {
     }
 };
 
+// Convert an ArrayBuffer into a byte-preserving string (one char per byte,
+// 0-255), so each MIME part can later be decoded with its own declared charset.
+// Reading the file as UTF-8 up front would corrupt non-UTF-8 8-bit parts.
+MboxViewer.prototype.bufferToBinaryString = function(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var chunkSize = 0x8000; // bound String.fromCharCode argument count
+    var chunks = [];
+    for (var i = 0; i < bytes.length; i += chunkSize) {
+        chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize)));
+    }
+    return chunks.join('');
+};
+
 MboxViewer.prototype.processSmallFile = function(file) {
     var self = this;
     var reader = new FileReader();
-    
+
     reader.onload = function(e) {
-        var content = e.target.result;
-        
+        var content = self.bufferToBinaryString(e.target.result);
+
         if (!content || (!content.indexOf || (content.indexOf('From ') === -1 && content.indexOf('Message-ID:') === -1))) {
             self.showError('This does not appear to be a valid mbox file');
             return;
@@ -594,7 +624,7 @@ MboxViewer.prototype.processSmallFile = function(file) {
     };
     
     try {
-        reader.readAsText(file, 'utf-8');
+        reader.readAsArrayBuffer(file);
     } catch (error) {
         self.showError('Cannot read file: ' + error.message);
     }
@@ -667,9 +697,9 @@ MboxViewer.prototype.loadChunk = function(chunkIndex) {
     
     var reader = new FileReader();
     reader.onload = function(e) {
-        var chunkText = e.target.result;
+        var chunkText = self.bufferToBinaryString(e.target.result);
         var emails = self.parseChunkEmails(chunkText);
-        
+
         // Cache the processed chunk
         self.processedChunks[chunkIndex] = emails;
         
@@ -680,8 +710,8 @@ MboxViewer.prototype.loadChunk = function(chunkIndex) {
     reader.onerror = function() {
         self.showChunkError('Failed to load chunk ' + (chunkIndex + 1));
     };
-    
-    reader.readAsText(slice, 'utf-8');
+
+    reader.readAsArrayBuffer(slice);
 };
 
 MboxViewer.prototype.parseChunkEmails = function(chunkText) {
@@ -877,9 +907,9 @@ MboxViewer.prototype.searchNextChunk = function() {
     
     var reader = new FileReader();
     reader.onload = function(e) {
-        var chunkText = e.target.result;
+        var chunkText = self.bufferToBinaryString(e.target.result);
         var emails = self.parseChunkEmails(chunkText);
-        
+
         // Search through emails in this chunk
         for (var i = 0; i < emails.length; i++) {
             var email = emails[i];
@@ -903,8 +933,8 @@ MboxViewer.prototype.searchNextChunk = function() {
     reader.onerror = function() {
         self.showError('Error searching chunk ' + (chunkIndex + 1));
     };
-    
-    reader.readAsText(slice, 'utf-8');
+
+    reader.readAsArrayBuffer(slice);
 };
 
 MboxViewer.prototype.emailMatchesSearch = function(email) {
