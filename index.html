@@ -25,6 +25,15 @@
             <button id="clearBtn">Clear</button>
         </div>
 
+        <div class="filter-section">
+            <input type="text" id="senderFilter" placeholder="From contains…" />
+            <select id="labelFilter" title="Filter by Gmail label">
+                <option value="">All labels</option>
+            </select>
+            <label class="filter-date">From <input type="date" id="dateFrom" /></label>
+            <label class="filter-date">To <input type="date" id="dateTo" /></label>
+        </div>
+
         <div class="main-content">
             <div class="email-list" id="emailList">
                 <div class="no-file-message">

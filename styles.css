@@ -119,6 +119,59 @@ header p {
     background: #d1d1d6;
 }
 
+.filter-section {
+    background: white;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.filter-section input[type="text"],
+.filter-section select {
+    padding: 10px 12px;
+    border: 2px solid #e5e5e7;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.filter-section input[type="text"] {
+    flex: 1;
+    min-width: 160px;
+}
+
+.filter-section input[type="text"]:focus,
+.filter-section select:focus {
+    border-color: #007aff;
+}
+
+.filter-date {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #86868b;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.filter-date input[type="date"] {
+    padding: 8px 10px;
+    border: 2px solid #e5e5e7;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    outline: none;
+}
+
+.filter-date input[type="date"]:focus {
+    border-color: #007aff;
+}
+
 .main-content {
     display: grid;
     grid-template-columns: 1fr 2fr;

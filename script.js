@@ -75,7 +75,15 @@ MboxParser.prototype.parseEmail = function(rawEmail) {
         email.subject = this.decodeHeader(h.subject).replace(/\r?\n/g, '');
     }
     if (h.date) {
-        email.date = this.parseDate(h.date);
+        // Parse once; derive both the display string and the filterable timestamp
+        var parsedDate = new Date(h.date);
+        var dateTime = parsedDate.getTime();
+        email.dateValue = isNaN(dateTime) ? null : dateTime;
+        try {
+            email.date = parsedDate.toLocaleString();
+        } catch (e) {
+            email.date = h.date;
+        }
     }
     if (h['message-id']) {
         email.messageId = h['message-id'].replace(/\r?\n/g, '');
@@ -113,14 +121,6 @@ MboxParser.prototype.parseEmailAddress = function(address) {
         return match.length > 2 ? (match[1].replace(/^\s+|\s+$/g, '') + ' <' + match[2] + '>') : match[1].replace(/^\s+|\s+$/g, '');
     }
     return address;
-};
-
-MboxParser.prototype.parseDate = function(dateStr) {
-    try {
-        return new Date(dateStr).toLocaleString();
-    } catch (e) {
-        return dateStr;
-    }
 };
 
 MboxParser.prototype.decodeHeader = function(header) {
@@ -447,26 +447,66 @@ MboxParser.prototype.parseGmailLabels = function(labelString) {
     return labels;
 };
 
-MboxParser.prototype.searchEmails = function(query) {
-    if (!query || !query.replace(/^\s+|\s+$/g, '')) {
-        this.filteredEmails = this.emails.slice();
-        return this.filteredEmails;
+// Does an email satisfy the (possibly empty) filter criteria? All fields are
+// ANDed; an empty/omitted field is ignored. Shared by the in-memory and
+// cross-chunk filtering paths. Criteria: { text, sender, label, dateFrom, dateTo }
+// where text/sender/label are lowercased and dateFrom/dateTo are timestamps.
+MboxParser.prototype.matchesCriteria = function(email, c) {
+    if (c.text) {
+        var t = c.text;
+        var inText = (email.from && email.from.toLowerCase().indexOf(t) !== -1) ||
+            (email.to && email.to.toLowerCase().indexOf(t) !== -1) ||
+            (email.subject && email.subject.toLowerCase().indexOf(t) !== -1) ||
+            (this.getSearchText(email).toLowerCase().indexOf(t) !== -1) ||
+            (email.gmailLabels && email.gmailLabels.some(function(l) {
+                return l.toLowerCase().indexOf(t) !== -1;
+            }));
+        if (!inText) return false;
     }
+    if (c.sender) {
+        if (!email.from || email.from.toLowerCase().indexOf(c.sender) === -1) return false;
+    }
+    if (c.label) {
+        var hasLabel = email.gmailLabels && email.gmailLabels.some(function(l) {
+            return l.toLowerCase() === c.label;
+        });
+        if (!hasLabel) return false;
+    }
+    if (c.dateFrom != null || c.dateTo != null) {
+        if (email.dateValue == null) return false;
+        if (c.dateFrom != null && email.dateValue < c.dateFrom) return false;
+        if (c.dateTo != null && email.dateValue > c.dateTo) return false;
+    }
+    return true;
+};
 
-    var searchTerm = query.toLowerCase();
+MboxParser.prototype.applyFilters = function(criteria) {
     this.filteredEmails = [];
-    
     for (var i = 0; i < this.emails.length; i++) {
-        var email = this.emails[i];
-        if (email.from.toLowerCase().indexOf(searchTerm) !== -1 ||
-            email.subject.toLowerCase().indexOf(searchTerm) !== -1 ||
-            this.getSearchText(email).toLowerCase().indexOf(searchTerm) !== -1 ||
-            email.to.toLowerCase().indexOf(searchTerm) !== -1) {
-            this.filteredEmails.push(email);
+        if (this.matchesCriteria(this.emails[i], criteria)) {
+            this.filteredEmails.push(this.emails[i]);
         }
     }
-
     return this.filteredEmails;
+};
+
+// Distinct Gmail labels across all parsed emails, for the label filter dropdown.
+MboxParser.prototype.collectLabels = function() {
+    var seen = {};
+    var labels = [];
+    for (var i = 0; i < this.emails.length; i++) {
+        var ls = this.emails[i].gmailLabels;
+        if (!ls) continue;
+        for (var j = 0; j < ls.length; j++) {
+            var key = ls[j].toLowerCase();
+            if (!seen[key]) {
+                seen[key] = true;
+                labels.push(ls[j]);
+            }
+        }
+    }
+    labels.sort();
+    return labels;
 };
 
 MboxParser.prototype.getFilteredEmails = function() {
@@ -496,14 +536,11 @@ MboxViewer.prototype.initializeElements = function() {
     this.searchInput = document.getElementById('searchInput');
     this.searchBtn = document.getElementById('searchBtn');
     this.clearBtn = document.getElementById('clearBtn');
+    this.senderInput = document.getElementById('senderFilter');
+    this.labelFilter = document.getElementById('labelFilter');
+    this.dateFromInput = document.getElementById('dateFrom');
+    this.dateToInput = document.getElementById('dateTo');
     this.stats = document.getElementById('stats');
-    
-    console.log('Elements initialized:', {
-        fileInput: !!this.fileInput,
-        emailList: !!this.emailList,
-        emailViewer: !!this.emailViewer,
-        stats: !!this.stats
-    });
 };
 
 MboxViewer.prototype.attachEventListeners = function() {
@@ -603,11 +640,13 @@ MboxViewer.prototype.handleFileSelect = function(event) {
         return;
     }
 
-    // Loading a new file resets any active search
+    // Loading a new file resets any active search and filters
     this.searchInput.value = '';
+    this.resetFilterInputs();
+    this.populateLabelFilter([]);
     this.isSearchMode = false;
     this.searchResults = [];
-    this.searchQuery = '';
+    this.criteria = null;
 
     this.fileInfo.textContent = 'Selected: ' + file.name + ' (' + this.formatFileSize(file.size) + ')';
 
@@ -669,6 +708,7 @@ MboxViewer.prototype.processSmallFile = function(file) {
                     self.showError('No emails found in this file. Please check if it\'s a valid mbox format.');
                     return;
                 }
+                self.populateLabelFilter(self.parser.collectLabels());
                 self.displayEmailList();
                 self.updateStats();
                 self.hideLoading();
@@ -846,17 +886,7 @@ MboxViewer.prototype.displayChunkEmails = function(emails) {
     for (var i = 0; i < emailElements.length; i++) {
         (function(index, element) {
             element.addEventListener('click', function() {
-                console.log('Email clicked at index:', index);
-                console.log('Email data:', emails[index]);
-                console.log('EmailViewer element:', self.emailViewer);
-                
-                if (!self.emailViewer) {
-                    console.error('EmailViewer element not found!');
-                    return;
-                }
-                
-                self.displayEmail(emails[index]);
-                self.highlightSelectedEmail(element);
+                self.selectEmail(emails[index], element);
             });
         })(i, emailElements[i]);
     }
@@ -875,43 +905,90 @@ MboxViewer.prototype.showChunkError = function(message) {
     chunkEmailsDiv.innerHTML = '<div class="error">' + message + '</div>';
 };
 
+// Read the free-text search box plus the advanced filter controls into one
+// criteria object (text/sender/label lowercased, dates as timestamps).
+MboxViewer.prototype.gatherCriteria = function() {
+    var fromVal = this.dateFromInput ? this.dateFromInput.value : '';
+    var toVal = this.dateToInput ? this.dateToInput.value : '';
+    return {
+        text: this.searchInput.value.replace(/^\s+|\s+$/g, '').toLowerCase(),
+        sender: this.senderInput ? this.senderInput.value.replace(/^\s+|\s+$/g, '').toLowerCase() : '',
+        label: this.labelFilter ? this.labelFilter.value : '',
+        dateFrom: fromVal ? new Date(fromVal + 'T00:00:00').getTime() : null,
+        dateTo: toVal ? new Date(toVal + 'T23:59:59.999').getTime() : null
+    };
+};
+
+MboxViewer.prototype.hasCriteria = function(c) {
+    return !!(c.text || c.sender || c.label || c.dateFrom != null || c.dateTo != null);
+};
+
+MboxViewer.prototype.describeCriteria = function(c) {
+    var parts = [];
+    if (c.text) parts.push('text "' + c.text + '"');
+    if (c.sender) parts.push('from "' + c.sender + '"');
+    if (c.label) parts.push('label "' + c.label + '"');
+    if (c.dateFrom != null || c.dateTo != null) parts.push('date range');
+    return parts.join(', ');
+};
+
+MboxViewer.prototype.resetFilterInputs = function() {
+    if (this.senderInput) this.senderInput.value = '';
+    if (this.dateFromInput) this.dateFromInput.value = '';
+    if (this.dateToInput) this.dateToInput.value = '';
+    if (this.labelFilter) this.labelFilter.value = '';
+};
+
+// Fill the label dropdown with the given labels (option value = lowercased,
+// to match matchesCriteria). Populated for in-memory files; in chunked mode the
+// full label set isn't known up front, so the dropdown stays at "All labels"
+// (label names are still matched by the free-text search there).
+MboxViewer.prototype.populateLabelFilter = function(labels) {
+    if (!this.labelFilter) return;
+    this.labelFilter.innerHTML = '<option value="">All labels</option>';
+    for (var i = 0; i < labels.length; i++) {
+        var option = document.createElement('option');
+        option.value = labels[i].toLowerCase();
+        option.textContent = labels[i];
+        this.labelFilter.appendChild(option);
+    }
+};
+
 MboxViewer.prototype.performSearch = function() {
-    var query = this.searchInput.value.trim();
-    
-    if (!query) {
-        this.showError('Please enter a search term');
+    var criteria = this.gatherCriteria();
+
+    if (!this.hasCriteria(criteria)) {
+        this.showError('Enter a search term or set a filter');
         return;
     }
 
     // Small-file mode: every email is already parsed in memory, so filter directly
     if (!this.file) {
-        this.parser.searchEmails(this.searchInput.value);
+        this.parser.applyFilters(criteria);
         this.displayEmailList();
         this.updateStats();
         if (this.emailViewer) {
-            this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the search results</div>';
+            this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the results</div>';
         }
         return;
     }
 
-    console.log('Starting search for:', query);
+    // Chunked mode: scan every chunk applying the same criteria
+    this.criteria = criteria;
     this.searchResults = [];
     this.currentSearchChunk = 0;
-    this.searchQuery = query.toLowerCase();
     this.isSearchMode = true;
-    
-    // Show search interface
     this.showSearchInterface();
     this.searchNextChunk();
 };
 
 MboxViewer.prototype.clearSearch = function() {
-    console.log('Clearing search');
     this.searchInput.value = '';
+    this.resetFilterInputs();
 
     // Small-file mode: reset the in-memory filter and re-render the full list
     if (!this.file) {
-        this.parser.searchEmails('');
+        this.parser.applyFilters({});
         this.displayEmailList();
         this.updateStats();
         if (this.emailViewer) {
@@ -922,7 +999,7 @@ MboxViewer.prototype.clearSearch = function() {
 
     this.isSearchMode = false;
     this.searchResults = [];
-    this.searchQuery = '';
+    this.criteria = null;
 
     // Return to normal chunk view
     this.showChunkNavigation();
@@ -931,7 +1008,7 @@ MboxViewer.prototype.clearSearch = function() {
 
 MboxViewer.prototype.showSearchInterface = function() {
     var searchHtml = '<div class="search-progress">' +
-        '<div class="search-header">Search Results for: "' + this.escapeHtml(this.searchQuery) + '"</div>' +
+        '<div class="search-header">Results for: ' + this.escapeHtml(this.describeCriteria(this.criteria || {}) || 'all emails') + '</div>' +
         '<div class="search-status" id="searchStatus">Searching...</div>' +
         '<button id="cancelSearch">Cancel Search</button>' +
         '</div>' +
@@ -997,15 +1074,7 @@ MboxViewer.prototype.searchNextChunk = function() {
 };
 
 MboxViewer.prototype.emailMatchesSearch = function(email) {
-    var query = this.searchQuery;
-    
-    return (email.from && email.from.toLowerCase().indexOf(query) !== -1) ||
-           (email.to && email.to.toLowerCase().indexOf(query) !== -1) ||
-           (email.subject && email.subject.toLowerCase().indexOf(query) !== -1) ||
-           (this.parser.getSearchText(email).toLowerCase().indexOf(query) !== -1) ||
-           (email.gmailLabels && email.gmailLabels.some(function(label) {
-               return label.toLowerCase().indexOf(query) !== -1;
-           }));
+    return this.parser.matchesCriteria(email, this.criteria || {});
 };
 
 MboxViewer.prototype.displaySearchResults = function() {
@@ -1057,8 +1126,7 @@ MboxViewer.prototype.displaySearchResults = function() {
             element.addEventListener('click', function() {
                 var result = self.searchResults[index];
                 console.log('Search result clicked:', result);
-                self.displayEmail(result.email);
-                self.highlightSelectedEmail(element);
+                self.selectEmail(result.email, element);
             });
         })(i, resultElements[i]);
     }
@@ -1304,8 +1372,7 @@ MboxViewer.prototype.displayEmailList = function() {
     for (var i = 0; i < emailElements.length; i++) {
         (function(index, element) {
             element.addEventListener('click', function() {
-                self.displayEmail(self.parser.getFilteredEmails()[index]);
-                self.highlightSelectedEmail(element);
+                self.selectEmail(self.parser.getFilteredEmails()[index], element);
             });
         })(i, emailElements[i]);
     }
@@ -1366,8 +1433,7 @@ MboxViewer.prototype.loadMoreEmails = function() {
             var index = parseInt(element.getAttribute('data-index'));
             element.classList.add('has-handler');
             element.addEventListener('click', function() {
-                self.displayEmail(self.parser.getFilteredEmails()[index]);
-                self.highlightSelectedEmail(element);
+                self.selectEmail(self.parser.getFilteredEmails()[index], element);
             });
         })(newEmailElements[i]);
     }
@@ -1382,6 +1448,13 @@ MboxViewer.prototype.loadMoreEmails = function() {
     }
     
     console.log('loadMoreEmails completed');
+};
+
+// Show an email in the viewer and highlight its row. The single selection
+// operation shared by every list/chunk/search click handler and keyboard nav.
+MboxViewer.prototype.selectEmail = function(email, element) {
+    this.displayEmail(email);
+    this.highlightSelectedEmail(element);
 };
 
 MboxViewer.prototype.highlightSelectedEmail = function(selectedItem) {
