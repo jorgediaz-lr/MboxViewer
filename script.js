@@ -18,18 +18,26 @@ function MboxParser() {
     this.filteredEmails = [];
 }
 
+// Split mbox content into individual raw message strings (each starting "From ").
+MboxParser.prototype.splitMessages = function(content) {
+    var parts = content.split(/^From /m);
+    var messages = [];
+    // parts[0] is the preamble before the first "From " separator
+    for (var i = 1; i < parts.length; i++) {
+        messages.push('From ' + parts[i]);
+    }
+    return messages;
+};
+
 MboxParser.prototype.parseMboxFile = function(content) {
     this.emails = [];
-    var messages = content.split(/^From /m);
-    
-    for (var i = 1; i < messages.length; i++) {
-        var message = 'From ' + messages[i];
-        var email = this.parseEmail(message);
+    var messages = this.splitMessages(content);
+    for (var i = 0; i < messages.length; i++) {
+        var email = this.parseEmail(messages[i]);
         if (email) {
             this.emails.push(email);
         }
     }
-    
     this.filteredEmails = this.emails.slice();
     return this.emails;
 };
@@ -419,20 +427,22 @@ MboxParser.prototype.stripHtml = function(html) {
         .replace(/^\s+|\s+$/g, '');
 };
 
-MboxParser.prototype.attachmentToBlob = function(attachment) {
-    // attachment.encoding is already lowercased/trimmed at parse time
+// Decode an attachment's transfer encoding to a raw byte string (chars 0-255).
+// Single dispatch shared by the Blob (download) and data-URL (inline) paths.
+// attachment.encoding is already lowercased/trimmed at parse time.
+MboxParser.prototype.attachmentBytes = function(attachment) {
     var encoding = attachment.encoding || '';
-    var bytes;
-
     if (encoding.indexOf('base64') !== -1) {
-        bytes = this.stringToBytes(atob(this.cleanBase64(attachment.data)));
-    } else if (encoding.indexOf('quoted-printable') !== -1) {
-        bytes = this.stringToBytes(this.decodeQuotedPrintable(attachment.data));
-    } else {
-        bytes = this.stringToBytes(attachment.data);
+        return atob(this.cleanBase64(attachment.data));
     }
+    if (encoding.indexOf('quoted-printable') !== -1) {
+        return this.decodeQuotedPrintable(attachment.data);
+    }
+    return attachment.data;
+};
 
-    return new Blob([bytes], {
+MboxParser.prototype.attachmentToBlob = function(attachment) {
+    return new Blob([this.stringToBytes(this.attachmentBytes(attachment))], {
         type: attachment.contentType || 'application/octet-stream'
     });
 };
@@ -762,16 +772,16 @@ MboxViewer.prototype.parseContentWithProgress = function(content, onComplete) {
     var parser = this.parser;
     parser.emails = [];
 
-    var messages = content.split(/^From /m);
-    var total = messages.length - 1; // index 0 is the preamble before the first "From "
-    var i = 1;
+    var messages = parser.splitMessages(content);
+    var total = messages.length;
+    var i = 0;
     var batchSize = 300;
 
     function step() {
         try {
-            var end = Math.min(i + batchSize, messages.length);
+            var end = Math.min(i + batchSize, total);
             for (; i < end; i++) {
-                var email = parser.parseEmail('From ' + messages[i]);
+                var email = parser.parseEmail(messages[i]);
                 if (email) {
                     parser.emails.push(email);
                 }
@@ -781,11 +791,9 @@ MboxViewer.prototype.parseContentWithProgress = function(content, onComplete) {
             return;
         }
 
-        var done = i - 1;
-        self.updateProgress(total ? done / total : 1,
-            'Parsing emails… ' + done + ' / ' + total);
+        self.updateProgress(total ? i / total : 1, 'Parsing emails… ' + i + ' / ' + total);
 
-        if (i < messages.length) {
+        if (i < total) {
             setTimeout(step, 0);
         } else {
             parser.filteredEmails = parser.emails.slice();
@@ -1318,24 +1326,18 @@ MboxViewer.prototype.inlineCidImages = function(email) {
     });
 };
 
-// Build a data: URL for an inline part (its data is already base64, or we
-// base64-encode the decoded bytes).
+// Build (and cache) a data: URL for an inline part, base64-encoding its decoded
+// bytes. Cached so re-renders (e.g. the raw-view toggle) don't re-encode.
 MboxViewer.prototype.attachmentDataUrl = function(attachment) {
-    var type = attachment.contentType || 'application/octet-stream';
-    var encoding = attachment.encoding || '';
-    try {
-        var base64;
-        if (encoding.indexOf('base64') !== -1) {
-            base64 = this.parser.cleanBase64(attachment.data);
-        } else if (encoding.indexOf('quoted-printable') !== -1) {
-            base64 = btoa(this.parser.decodeQuotedPrintable(attachment.data));
-        } else {
-            base64 = btoa(attachment.data);
+    if (attachment._dataUrl == null) {
+        try {
+            var type = attachment.contentType || 'application/octet-stream';
+            attachment._dataUrl = 'data:' + type + ';base64,' + btoa(this.parser.attachmentBytes(attachment));
+        } catch (e) {
+            attachment._dataUrl = '';
         }
-        return 'data:' + type + ';base64,' + base64;
-    } catch (e) {
-        return '';
     }
+    return attachment._dataUrl;
 };
 
 MboxViewer.prototype.downloadEmail = function(email) {
