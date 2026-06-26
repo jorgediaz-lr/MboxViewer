@@ -545,6 +545,12 @@ MboxViewer.prototype.handleFileSelect = function(event) {
         return;
     }
 
+    // Loading a new file resets any active search
+    this.searchInput.value = '';
+    this.isSearchMode = false;
+    this.searchResults = [];
+    this.searchQuery = '';
+
     this.fileInfo.textContent = 'Selected: ' + file.name + ' (' + this.formatFileSize(file.size) + ')';
 
     // For large files, warn user
@@ -1118,13 +1124,6 @@ MboxViewer.prototype.displayEmailList = function() {
     
     if (emails.length === 0) {
         this.emailList.innerHTML = '<div class="no-file-message">No emails found</div>';
-        return;
-    }
-
-    // Prevent redundant renders if we're already showing emails and count hasn't changed much
-    var currentEmailItems = this.emailList.querySelectorAll('.email-item').length;
-    if (currentEmailItems > 0 && emails.length - currentEmailItems < 100) {
-        console.log('Skipping render - not enough new emails since last render');
         return;
     }
 
