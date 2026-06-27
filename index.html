@@ -8,18 +8,17 @@
 </head>
 <body>
     <div class="container">
-        <header>
+        <header class="topbar">
             <h1>📧 Mbox File Viewer</h1>
+            <div class="file-input-section">
+                <input type="file" id="mboxFile" />
+                <label for="mboxFile" class="file-label">Choose Mbox File</label>
+                <div class="file-info" id="fileInfo"></div>
+            </div>
         </header>
 
-        <div class="file-input-section">
-            <input type="file" id="mboxFile" />
-            <label for="mboxFile" class="file-label">Choose Mbox File</label>
-            <div class="file-info" id="fileInfo"></div>
-        </div>
-
-        <div class="search-section" id="searchSection">
-            <button type="button" class="search-toggle" id="searchToggle" aria-expanded="true">
+        <div class="search-section collapsed" id="searchSection">
+            <button type="button" class="search-toggle" id="searchToggle" aria-expanded="false">
                 <span>Search &amp; filters</span>
                 <span class="search-toggle-icon" aria-hidden="true">▾</span>
             </button>
