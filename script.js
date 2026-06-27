@@ -793,7 +793,7 @@ MboxViewer.prototype.buildIndex = function(file, onComplete) {
             gmailLabels: f.gmailLabels
         });
     }, function(fraction) {
-        self.updateProgress(fraction, 'Indexing… ' + self.index.length + ' emails');
+        self.updateProgress(fraction, 'Indexing… ' + self.index.length + ' emails (' + Math.round(fraction * 100) + '%)');
     }, function() {
         onComplete(self.index);
     });
