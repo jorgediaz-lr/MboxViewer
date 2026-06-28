@@ -15,7 +15,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 function MboxParser() {
     this.emails = [];
-    this.filteredEmails = [];
 }
 
 // Split mbox content into individual raw message strings (each starting "From ").
@@ -38,7 +37,6 @@ MboxParser.prototype.parseMboxFile = function(content) {
             this.emails.push(email);
         }
     }
-    this.filteredEmails = this.emails.slice();
     return this.emails;
 };
 
@@ -183,13 +181,11 @@ MboxParser.prototype.decodeHeader = function(header) {
                         return this.decodeBytes(decoded, charset);
                     }
                 } catch (e) {
-                    console.log('Error decoding header part:', match, e);
                     return data;
                 }
                 return data;
             }.bind(this));
         } catch (e) {
-            console.log('Error decoding header:', header, e);
             return header;
         }
     }
@@ -680,7 +676,6 @@ MboxViewer.prototype.processFile = function(file) {
         self.filtered = index.slice();
         self.renderList();
         self.updateStats();
-        self.hideLoading();
         if (self.emailViewer) {
             self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
         }
@@ -1075,7 +1070,6 @@ MboxViewer.prototype.performSearch = function() {
             self.filtered = results;
             self.renderList();
             self.updateStats();
-            self.hideLoading();
             if (self.emailViewer) {
                 self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the results</div>';
             }
@@ -1378,10 +1372,6 @@ MboxViewer.prototype.updateProgress = function(fraction, message) {
             label.textContent = message;
         }
     }
-};
-
-MboxViewer.prototype.hideLoading = function() {
-    // Loading is replaced when renderList paints the list
 };
 
 MboxViewer.prototype.showError = function(message) {
