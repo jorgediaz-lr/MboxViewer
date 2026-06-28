@@ -275,7 +275,10 @@ MboxParser.prototype.decodeBytes = function(binary, charset) {
     return this.decodeUtf8(binary);
 };
 
-MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body, contentId) {
+MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body, contentId, depth) {
+    // Guard against runaway nesting: a crafted email of deeply-nested multiparts
+    // would otherwise recurse until the call stack overflows.
+    if (depth > 100) return;
     contentType = contentType || 'text/plain';
     // Match on the media-type token only (before the first ';'), so a parameter
     // value like name="text/report" can't be mistaken for the part's type.
@@ -287,7 +290,7 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
         if (boundary) {
             var parts = this.splitMimeParts(body, boundary);
             for (var i = 0; i < parts.length; i++) {
-                this.parseMimePartString(email, parts[i]);
+                this.parseMimePartString(email, parts[i], (depth || 0) + 1);
             }
         } else {
             // Malformed multipart without a boundary - decode the raw bytes as text
@@ -329,7 +332,7 @@ MboxParser.prototype.processMimePart = function(email, contentType, transferEnco
     }
 };
 
-MboxParser.prototype.parseMimePartString = function(email, partString) {
+MboxParser.prototype.parseMimePartString = function(email, partString, depth) {
     // A sub-part carries its own headers, then a blank line, then its body
     var separator = partString.indexOf('\n\n');
     var headerBlock = '';
@@ -347,7 +350,8 @@ MboxParser.prototype.parseMimePartString = function(email, partString) {
         headers['content-transfer-encoding'] || '',
         headers['content-disposition'] || '',
         partBody,
-        headers['content-id'] || ''
+        headers['content-id'] || '',
+        depth
     );
 };
 
@@ -954,7 +958,15 @@ MboxViewer.prototype.loadEmail = function(entry, callback) {
     }
     var reader = new FileReader();
     reader.onload = function(e) {
-        var email = self.parser.parseEmail(self.bufferToBinaryString(e.target.result));
+        var email;
+        try {
+            email = self.parser.parseEmail(self.bufferToBinaryString(e.target.result));
+        } catch (err) {
+            if (self.emailViewer) {
+                self.emailViewer.innerHTML = '<div class="no-email-selected">This email could not be displayed (malformed message).</div>';
+            }
+            return;
+        }
         self.cacheEmail(entry.offset, email);
         callback(email);
     };
@@ -1188,7 +1200,12 @@ MboxViewer.prototype.performSearch = function() {
         var results = [];
         this.streamMessages(this.file, function(text, offset, length) {
             if (text.indexOf('From ') !== 0) return;
-            var email = self.parser.parseEmail(text);
+            var email;
+            try {
+                email = self.parser.parseEmail(text);
+            } catch (err) {
+                return; // skip a message that fails to parse; keep scanning
+            }
             if (self.parser.hasTrashLabel(email.gmailLabels)) return;
             if (self.parser.matchesCriteria(email, criteria)) {
                 results.push({
