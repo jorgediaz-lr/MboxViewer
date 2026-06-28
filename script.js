@@ -455,8 +455,10 @@ MboxParser.prototype.getMimeParameter = function(headerValue, paramName) {
     // Plain: name="quoted value" or name=bare-value. Cache the compiled regex
     // per parameter name (a tiny fixed set: boundary/filename/name/charset).
     var cache = this._paramRegexCache || (this._paramRegexCache = {});
+    // Anchor to a parameter boundary (start, ';' or whitespace) so e.g. asking
+    // for "name" doesn't match the "name=" inside "filename=".
     var re = cache[paramName] ||
-        (cache[paramName] = new RegExp(paramName + '\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n\\s]+))', 'i'));
+        (cache[paramName] = new RegExp('(?:^|[;\\s])' + paramName + '\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n\\s]+))', 'i'));
 
     var match = headerValue.match(re);
     if (!match) return '';
@@ -629,6 +631,7 @@ function MboxViewer() {
     this.parser = new MboxParser();
     this.loadToken = 0;       // bumped to supersede/cancel an in-flight index or search
     this.indexReady = false;  // true once a full index has finished building
+    this.openSeq = 0;         // bumped per email open, so a slower earlier read can't win
     this.initializeElements();
     this.attachEventListeners();
 }
@@ -1059,7 +1062,9 @@ MboxViewer.prototype.openEmail = function(position, element) {
     if (!entry) return;
     this.saveBookmark(entry);
     var self = this;
+    var seq = ++this.openSeq;
     this.loadEmail(entry, function(email) {
+        if (seq !== self.openSeq) return; // a newer click/selection superseded this load
         self.selectEmail(email, element);
     });
 };
@@ -1560,10 +1565,9 @@ MboxViewer.prototype.formatFileSize = function(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
+var HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 MboxViewer.prototype.escapeHtml = function(text) {
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text == null ? '' : text).replace(/[&<>"']/g, function(c) { return HTML_ESCAPES[c]; });
 };
 
 // Initialize when DOM is loaded
