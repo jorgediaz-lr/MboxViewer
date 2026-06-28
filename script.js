@@ -404,11 +404,56 @@ MboxParser.prototype.splitMimeParts = function(body, boundary) {
     return parts;
 };
 
+// %XX-decode a string to raw bytes, then decode those bytes with the charset.
+MboxParser.prototype.decodePercent = function(str, charset) {
+    var bytes = str.replace(/%([0-9A-Fa-f]{2})/g, function(m, h) {
+        return String.fromCharCode(parseInt(h, 16));
+    });
+    return this.decodeBytes(bytes, charset || 'utf-8');
+};
+
 MboxParser.prototype.getMimeParameter = function(headerValue, paramName) {
     if (!headerValue) return '';
+    var lower = paramName.toLowerCase();
 
-    // Match param="quoted value" or param=bare-value in a single pass; cache the
-    // compiled regex per parameter name (a tiny fixed set: boundary/filename/name).
+    // RFC 2231: a parameter may be continued (name*0, name*1, …) and/or
+    // extended-encoded (name*=charset'lang'pct-encoded, name*N*=…). Only walk
+    // this path when a '*' is actually present, so common headers stay fast.
+    if (headerValue.indexOf('*') !== -1) {
+        var contRe = new RegExp('(?:^|[;\\s])' + lower + '\\*(\\d+)(\\*)?\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n]+))', 'gi');
+        var pieces = [];
+        var anyEncoded = false;
+        var charset0 = null;
+        var m;
+        while ((m = contRe.exec(headerValue)) !== null) {
+            pieces[parseInt(m[1], 10)] = { val: (m[3] !== undefined ? m[3] : m[4]) || '', enc: !!m[2] };
+            if (m[2]) anyEncoded = true;
+        }
+        if (pieces.length) {
+            var joined = '';
+            for (var i = 0; i < pieces.length; i++) {
+                if (!pieces[i]) continue;
+                var v = pieces[i].val;
+                if (pieces[i].enc && charset0 === null) {
+                    var cm = v.match(/^([^']*)'[^']*'(.*)$/);
+                    if (cm) { charset0 = cm[1]; v = cm[2]; }
+                }
+                joined += v;
+            }
+            return anyEncoded ? this.decodePercent(joined, charset0) : joined;
+        }
+        // Single extended value: name*=charset'lang'pct
+        var extRe = new RegExp('(?:^|[;\\s])' + lower + '\\*\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n]+))', 'i');
+        var em = headerValue.match(extRe);
+        if (em) {
+            var raw = (em[1] !== undefined ? em[1] : em[2]) || '';
+            var pm = raw.match(/^([^']*)'[^']*'(.*)$/);
+            return pm ? this.decodePercent(pm[2], pm[1]) : raw;
+        }
+    }
+
+    // Plain: name="quoted value" or name=bare-value. Cache the compiled regex
+    // per parameter name (a tiny fixed set: boundary/filename/name/charset).
     var cache = this._paramRegexCache || (this._paramRegexCache = {});
     var re = cache[paramName] ||
         (cache[paramName] = new RegExp(paramName + '\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n\\s]+))', 'i'));
@@ -582,6 +627,8 @@ MboxParser.prototype.matchesCriteria = function(email, c) {
 // MboxViewer class
 function MboxViewer() {
     this.parser = new MboxParser();
+    this.loadToken = 0;       // bumped to supersede/cancel an in-flight index or search
+    this.indexReady = false;  // true once a full index has finished building
     this.initializeElements();
     this.attachEventListeners();
 }
@@ -724,15 +771,19 @@ MboxViewer.prototype.handleFileSelect = function(event) {
 // body on demand. Memory stays ~constant regardless of file size.
 MboxViewer.prototype.processFile = function(file) {
     var self = this;
+    var token = ++this.loadToken;   // supersede any in-flight index/search
+    this.indexReady = false;
     this.file = file;
     this.viewCache = {};
     this.viewOrder = [];
 
     this.buildIndex(file, function(index) {
+        if (token !== self.loadToken) return;   // a newer load or a cancel superseded this
         if (index.length === 0) {
             self.showError('No emails found in this file. Please check if it\'s a valid mbox format.');
             return;
         }
+        self.indexReady = true;
         self.populateLabelFilter(self.collectIndexLabels());
         self.filtered = index.slice();
         self.renderList();
@@ -762,14 +813,20 @@ MboxViewer.prototype.bufferToBinaryString = function(buffer) {
 // across slice boundaries, so a message straddling a slice edge is never
 // truncated (this is what fixes the old 5 MB chunk-boundary bug). The async
 // FileReader reads yield to the UI between slices.
-MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onComplete) {
+MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onComplete, token) {
     var self = this;
     var sliceSize = this.indexSliceSize || (8 * 1024 * 1024);
     var carry = '';        // partial trailing message not yet finalized
     var carryOffset = 0;   // file byte offset where `carry` begins
     var fileOffset = 0;    // next byte to read
 
+    function superseded() {
+        // A newer index/search started, or the user cancelled (loadToken bumped).
+        return token !== undefined && token !== self.loadToken;
+    }
+
     function readNext() {
+        if (superseded()) return;
         if (fileOffset >= file.size) {
             if (carry.indexOf('From ') === 0) {
                 onMessage(carry, carryOffset, carry.length);
@@ -780,6 +837,7 @@ MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onCo
         var end = Math.min(fileOffset + sliceSize, file.size);
         var reader = new FileReader();
         reader.onload = function(e) {
+            if (superseded()) return; // cancelled while this slice was reading
             var combined = carry + self.bufferToBinaryString(e.target.result);
             var base = carryOffset; // file offset of combined[0]
 
@@ -839,6 +897,7 @@ MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onCo
 MboxViewer.prototype.buildIndex = function(file, onComplete) {
     var self = this;
     var parser = this.parser;
+    var token = this.loadToken;
     this.index = [];
 
     this.streamMessages(file, function(text, offset, length) {
@@ -860,7 +919,7 @@ MboxViewer.prototype.buildIndex = function(file, onComplete) {
         self.updateProgress(fraction, 'Indexing… ' + self.index.length + ' emails (' + Math.round(fraction * 100) + '%)');
     }, function() {
         onComplete(self.index);
-    });
+    }, token);
 };
 
 // Distinct, sorted Gmail labels across the index, for the label dropdown.
@@ -1119,6 +1178,7 @@ MboxViewer.prototype.performSearch = function() {
     var self = this;
     if (criteria.text) {
         // Free-text search needs message bodies → stream-scan the file once.
+        var token = ++this.loadToken;
         this.showLoading('Searching…');
         var results = [];
         this.streamMessages(this.file, function(text, offset, length) {
@@ -1136,13 +1196,14 @@ MboxViewer.prototype.performSearch = function() {
         }, function(fraction) {
             self.updateProgress(fraction, 'Searching… ' + results.length + ' matches');
         }, function() {
+            if (token !== self.loadToken) return; // cancelled / superseded
             self.filtered = results;
             self.renderList();
             self.updateStats();
             if (self.emailViewer) {
                 self.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the results</div>';
             }
-        });
+        }, token);
     } else {
         // Metadata-only filter (sender / label / date) → instant over the index.
         this.filtered = this.filterIndex(criteria);
@@ -1236,6 +1297,7 @@ MboxViewer.prototype.renderEmail = function() {
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
         frame.setAttribute('sandbox', '');
+        frame.setAttribute('title', 'Email message content');
         frame.srcdoc = this.buildFrameDocument(email);
         this.emailViewer.appendChild(frame);
     } else {
@@ -1434,9 +1496,37 @@ MboxViewer.prototype.showLoading = function(message) {
     this.emailList.innerHTML =
         '<div class="loading">' +
             '<div class="loading-message" id="loadingMessage">' + this.escapeHtml(message) + '</div>' +
-            '<div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>' +
+            '<div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+                '<div class="progress-fill" id="progressFill"></div></div>' +
+            '<button type="button" class="cancel-btn" id="cancelLoadBtn">Cancel</button>' +
         '</div>';
     this.emailViewer.innerHTML = '<div class="no-email-selected">Loading...</div>';
+    var self = this;
+    var cancel = document.getElementById('cancelLoadBtn');
+    if (cancel) {
+        cancel.addEventListener('click', function() { self.cancelLoad(); });
+    }
+};
+
+// Cancel an in-flight index build or full-text search: bump the token (so the
+// streaming callbacks bail) and restore the previous view.
+MboxViewer.prototype.cancelLoad = function() {
+    this.loadToken++;
+    if (this.indexReady && this.index) {
+        // A complete index already exists (a search was running) — restore it.
+        this.filtered = this.index.slice();
+        this.renderList();
+        this.updateStats();
+    } else {
+        // Initial indexing cancelled — discard the partial index.
+        this.index = [];
+        this.filtered = [];
+        this.emailList.innerHTML = '<div class="no-file-message">Select an mbox file to view your emails</div>';
+        this.stats.textContent = '';
+    }
+    if (this.emailViewer) {
+        this.emailViewer.innerHTML = '<div class="no-email-selected">Select an email from the list to view its content</div>';
+    }
 };
 
 // Update the loading progress bar (fraction 0..1) and optional message.
@@ -1445,6 +1535,9 @@ MboxViewer.prototype.updateProgress = function(fraction, message) {
     if (fill) {
         var pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
         fill.style.width = pct + '%';
+        if (fill.parentNode && fill.parentNode.setAttribute) {
+            fill.parentNode.setAttribute('aria-valuenow', pct);
+        }
     }
     if (message) {
         var label = document.getElementById('loadingMessage');

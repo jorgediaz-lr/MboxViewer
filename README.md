@@ -47,7 +47,7 @@ Memory therefore scales with the *number* of emails, not the size of the file. V
 
 ### Streaming and message boundaries
 
-A single primitive, `streamMessages`, reads the file slice by slice and emits each complete mbox message (split on lines beginning with `From `). It carries a partial trailing message in a buffer across slice boundaries, so a message that straddles a slice edge is **never** truncated — a class of bug that fixed-window chunking is prone to. The exact byte offset and length of every message are recorded in the index, which is what makes on-demand loading (`file.slice(offset, length)`) possible.
+A single primitive, `streamMessages`, reads the file slice by slice and emits each complete mbox message. Messages are split on **postmark lines** — a line beginning `From ` that also contains a 4-digit year (the standard Gmail/Thunderbird `From <sender> <date>` separator) — so prose body lines like "From now on…" are not mistaken for boundaries. It carries a partial trailing message in a buffer across slice boundaries, so a message that straddles a slice edge is **never** truncated — a class of bug that fixed-window chunking is prone to. The exact byte offset and length of every message are recorded in the index, which is what makes on-demand loading (`file.slice(offset, length)`) possible.
 
 ### Parsing and decoding
 
@@ -109,7 +109,7 @@ All processing happens entirely in your browser. No data is sent to any server, 
 ## Limitations
 
 - Remote (`http`) images and other external resources in HTML mail are **blocked** by the render iframe's Content-Security-Policy (so opening an email can't phone home); only inline (`cid:`) images, embedded as `data:` URLs, are shown. Thunderbird `<attachment …>` placeholder text left in replies still can't be recovered, since that data isn't in the file
-- mbox messages are split on postmark lines (`From … <year>`); a body line that looks like a postmark (begins with `From ` and contains a 4-digit year) could still be mis-detected as a boundary
+- mbox messages are split on postmark lines (`From … <year>`): a body line that looks like a postmark (begins with `From ` and contains a 4-digit year) could be mis-detected as a boundary, and conversely a non-standard separator with no recognizable year would not be split
 - Full-text body search re-reads the file each time (bounded memory, shows progress)
 - The one-time index build reads the whole file, so opening a very large archive takes a few seconds
 

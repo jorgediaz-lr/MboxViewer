@@ -339,6 +339,22 @@ body {
     border: 1px solid #ff3b30;
 }
 
+.cancel-btn {
+    margin-top: 16px;
+    padding: 8px 18px;
+    background: #e5e5e7;
+    color: #1d1d1f;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.2s;
+}
+
+.cancel-btn:hover {
+    background: #d1d1d6;
+}
+
 .load-more-btn {
     padding: 15px 20px;
     background: #f0f0f0;
