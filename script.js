@@ -17,14 +17,35 @@ function MboxParser() {
     this.emails = [];
 }
 
-// Split mbox content into individual raw message strings (each starting "From ").
+// An mbox separator ("postmark") line looks like "From <sender> <date>". We
+// require a 4-digit year (19xx/20xx) so that prose body lines such as
+// "From now on…" are NOT mistaken for message boundaries — a real bug in naive
+// "split on every From " parsers. Matches Gmail and Thunderbird postmarks.
+MboxParser.prototype.isPostmarkLine = function(line) {
+    return /^From .*(?:19|20)\d{2}/.test(line);
+};
+
+// Split mbox content into individual raw message strings, breaking only on
+// postmark lines (see isPostmarkLine), preserving each line's original newline.
 MboxParser.prototype.splitMessages = function(content) {
-    var parts = content.split(/^From /m);
     var messages = [];
-    // parts[0] is the preamble before the first "From " separator
-    for (var i = 1; i < parts.length; i++) {
-        messages.push('From ' + parts[i]);
+    var current = null;
+    var pos = 0;
+    while (true) {
+        var nl = content.indexOf('\n', pos);
+        var lineEnd = (nl === -1) ? content.length : nl;
+        var line = content.substring(pos, lineEnd);
+        var piece = line + (nl === -1 ? '' : '\n');
+        if (this.isPostmarkLine(line)) {
+            if (current !== null) messages.push(current);
+            current = piece;
+        } else if (current !== null) {
+            current += piece;
+        }
+        if (nl === -1) break;
+        pos = nl + 1;
     }
+    if (current !== null) messages.push(current);
     return messages;
 };
 
@@ -154,12 +175,40 @@ MboxParser.prototype.hasTrashLabel = function(labels) {
     return false;
 };
 
+// Format one or more comma-separated addresses for display ("Name <addr>").
+// Splits on commas that are NOT inside quotes or angle brackets, so a quoted
+// display name with a comma (e.g. "Lastname, Firstname" <a@x>) stays intact.
 MboxParser.prototype.parseEmailAddress = function(address) {
-    var match = address.match(/^(.+?)\s*<(.+?)>$/) || address.match(/^(.+)$/);
-    if (match) {
-        return match.length > 2 ? (match[1].replace(/^\s+|\s+$/g, '') + ' <' + match[2] + '>') : match[1].replace(/^\s+|\s+$/g, '');
+    var groups = [];
+    var cur = '';
+    var inQuote = false, inAngle = false;
+    for (var i = 0; i < address.length; i++) {
+        var ch = address.charAt(i);
+        if (ch === '"') inQuote = !inQuote;
+        else if (ch === '<') inAngle = true;
+        else if (ch === '>') inAngle = false;
+        if (ch === ',' && !inQuote && !inAngle) {
+            groups.push(cur);
+            cur = '';
+        } else {
+            cur += ch;
+        }
     }
-    return address;
+    groups.push(cur);
+
+    var out = [];
+    for (var g = 0; g < groups.length; g++) {
+        var a = groups[g].replace(/^\s+|\s+$/g, '');
+        if (!a) continue;
+        var m = a.match(/^(.+?)\s*<(.+?)>$/);
+        if (m) {
+            var name = m[1].replace(/^\s+|\s+$/g, '').replace(/^"|"$/g, '');
+            out.push(name ? (name + ' <' + m[2] + '>') : m[2]);
+        } else {
+            out.push(a);
+        }
+    }
+    return out.length ? out.join(', ') : address;
 };
 
 MboxParser.prototype.decodeHeader = function(header) {
@@ -167,6 +216,9 @@ MboxParser.prototype.decodeHeader = function(header) {
     
     // Handle MIME encoded-word format =?charset?encoding?data?=
     if (header.indexOf('=?') !== -1) {
+        // RFC 2047: whitespace separating two adjacent encoded-words is not part
+        // of the decoded text and must be removed before decoding.
+        header = header.replace(/\?=\s+=\?/g, '?==?');
         try {
             return header.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, function(match, charset, encoding, data) {
                 try {
@@ -185,17 +237,6 @@ MboxParser.prototype.decodeHeader = function(header) {
                 }
                 return data;
             }.bind(this));
-        } catch (e) {
-            return header;
-        }
-    }
-    
-    // Handle quoted-printable encoding without MIME wrapper
-    if (header.indexOf('=') !== -1) {
-        try {
-            return header.replace(/=([0-9A-F]{2})/gi, function(match, hex) {
-                return String.fromCharCode(parseInt(hex, 16));
-            });
         } catch (e) {
             return header;
         }
@@ -236,7 +277,9 @@ MboxParser.prototype.decodeBytes = function(binary, charset) {
 
 MboxParser.prototype.processMimePart = function(email, contentType, transferEncoding, disposition, body, contentId) {
     contentType = contentType || 'text/plain';
-    var lowerType = contentType.toLowerCase();
+    // Match on the media-type token only (before the first ';'), so a parameter
+    // value like name="text/report" can't be mistaken for the part's type.
+    var lowerType = contentType.split(';')[0].toLowerCase().replace(/^\s+|\s+$/g, '');
 
     // Multipart container: split on its declared boundary and recurse into each part
     if (lowerType.indexOf('multipart/') !== -1) {
@@ -338,14 +381,14 @@ MboxParser.prototype.parseHeaders = function(headerBlock) {
 };
 
 MboxParser.prototype.splitMimeParts = function(body, boundary) {
-    var delimiter = '--' + boundary;
-    var rawParts = body.split(delimiter);
+    // Anchor the boundary to a line start ("\n--boundary") so a boundary string
+    // that happens to appear inside a part's content can't trigger a mis-split.
+    var delimiter = '\n--' + boundary;
+    var rawParts = ('\n' + body).split(delimiter);
     var parts = [];
 
-    for (var i = 0; i < rawParts.length; i++) {
+    for (var i = 1; i < rawParts.length; i++) {
         // Index 0 is the preamble before the first boundary - ignore it
-        if (i === 0) continue;
-
         var part = rawParts[i];
 
         // The closing delimiter is "--boundary--", so a part starting with "--"
@@ -419,8 +462,15 @@ MboxParser.prototype.decodeTransferEncoding = function(content, encoding, charse
 };
 
 MboxParser.prototype.estimateDecodedSize = function(data, encoding) {
-    if ((encoding || '').toLowerCase().indexOf('base64') !== -1) {
+    var enc = (encoding || '').toLowerCase();
+    if (enc.indexOf('base64') !== -1) {
         return Math.floor(this.cleanBase64(data).length * 3 / 4);
+    }
+    if (enc.indexOf('quoted-printable') !== -1) {
+        // Each "=XX" is 3 encoded chars -> 1 byte; soft line breaks vanish.
+        var withoutSoft = data.replace(/=\r?\n/g, '');
+        var hex = (withoutSoft.match(/=[0-9A-Fa-f]{2}/g) || []).length;
+        return withoutSoft.length - hex * 2;
     }
     return data.length;
 };
@@ -449,8 +499,12 @@ MboxParser.prototype.stripHtml = function(html) {
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]*>/g, '')
         .replace(/&nbsp;/g, ' ')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
+        .replace(/&#x([0-9a-fA-F]+);/g, function(m, h) { return String.fromCharCode(parseInt(h, 16)); })
+        .replace(/&#(\d+);/g, function(m, d) { return String.fromCharCode(parseInt(d, 10)); })
         .replace(/&amp;/g, '&')
         .replace(/^\s+|\s+$/g, '');
 };
@@ -616,6 +670,13 @@ MboxViewer.prototype.moveSelection = function(delta) {
     }
 
     var next = (index === -1) ? (delta > 0 ? 0 : items.length - 1) : index + delta;
+
+    // Navigating past the last loaded row pulls in the next page first.
+    if (delta > 0 && next > items.length - 1 && document.getElementById('loadMoreBtn')) {
+        this.loadMore();
+        items = this.emailList.querySelectorAll('.email-item');
+    }
+
     next = Math.max(0, Math.min(items.length - 1, next));
 
     var target = items[next];
@@ -730,11 +791,19 @@ MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onCo
             // be dropped when the next boundary arrived.
             var starts = [];
             if (combined.indexOf('From ') === 0) {
-                starts.push(0);
+                starts.push(0); // current message start (file start or carried partial)
             }
             var idx = combined.indexOf('\nFrom ');
             while (idx !== -1) {
-                starts.push(idx + 1);
+                var s = idx + 1;
+                var lineEnd = combined.indexOf('\n', s);
+                // Only a postmark line ("From … <year>") starts a new message; skip
+                // prose body lines like "From now on…". A candidate whose line
+                // hasn't fully arrived yet (lineEnd === -1, at the tail) stays in
+                // the carry and is re-evaluated on the next slice.
+                if (lineEnd !== -1 && self.parser.isPostmarkLine(combined.substring(s, lineEnd))) {
+                    starts.push(s);
+                }
                 idx = combined.indexOf('\nFrom ', idx + 1);
             }
 
@@ -1167,7 +1236,7 @@ MboxViewer.prototype.renderEmail = function() {
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
         frame.setAttribute('sandbox', '');
-        frame.srcdoc = this.inlineCidImages(email);
+        frame.srcdoc = this.buildFrameDocument(email);
         this.emailViewer.appendChild(frame);
     } else {
         var contentDiv = document.createElement('div');
@@ -1192,6 +1261,15 @@ MboxViewer.prototype.renderEmail = function() {
             self.renderEmail();
         });
     }
+};
+
+// Build the document for the sandboxed render iframe: a Content-Security-Policy
+// that blocks every remote subresource (so opening mail can't load tracking
+// pixels / phone home), followed by the email HTML with inline cid: parts
+// rewritten to data: URLs (which the policy still permits).
+MboxViewer.prototype.buildFrameDocument = function(email) {
+    var csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\' data:; font-src data:;">';
+    return csp + this.inlineCidImages(email);
 };
 
 // Rewrite cid: references in the HTML body to data: URLs built from the matching
@@ -1234,7 +1312,9 @@ MboxViewer.prototype.downloadEmail = function(email) {
     try {
         // Strip the leading mbox "From " envelope line to produce a clean .eml
         var raw = (email.raw || '').replace(/^From .*\r?\n/, '');
-        var blob = new Blob([raw], { type: 'message/rfc822' });
+        // raw is a byte string (one char per byte); convert to bytes so Blob
+        // doesn't UTF-8 re-encode (which would corrupt any byte >= 0x80).
+        var blob = new Blob([this.parser.stringToBytes(raw)], { type: 'message/rfc822' });
         var url = URL.createObjectURL(blob);
         var link = document.createElement('a');
         link.href = url;
@@ -1375,15 +1455,15 @@ MboxViewer.prototype.updateProgress = function(fraction, message) {
 };
 
 MboxViewer.prototype.showError = function(message) {
-    this.emailList.innerHTML = '<div class="error">' + message + '</div>';
+    this.emailList.innerHTML = '<div class="error">' + this.escapeHtml(message) + '</div>';
     this.emailViewer.innerHTML = '<div class="no-email-selected">Error occurred</div>';
 };
 
 MboxViewer.prototype.formatFileSize = function(bytes) {
     if (bytes === 0) return '0 Bytes';
     var k = 1024;
-    var sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    var i = Math.floor(Math.log(bytes) / Math.log(k));
+    var sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    var i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 

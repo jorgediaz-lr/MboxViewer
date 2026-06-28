@@ -56,7 +56,7 @@ The file is read as **raw bytes**, not as UTF-8 text, so each MIME part keeps it
 - walks the MIME tree recursively (nested multipart; boundary taken from the `Content-Type` header);
 - decodes each part's transfer encoding (base64, quoted-printable, 7bit/8bit);
 - decodes the bytes with the part's **declared charset** via the browser's `TextDecoder` (utf-8, windows-125x, iso-8859-\*, shift_jis, gb18030, big5, …), so non-UTF-8 8-bit bodies (e.g. `charset=windows-1252` + `Content-Transfer-Encoding: 8bit`) render correctly; encoded-word headers (`=?charset?B/Q?…?=`) decode the same way;
-- renders HTML in a **sandboxed `<iframe>`** (scripts, forms, and same-origin access blocked) and rewrites inline `cid:` image references into embedded `data:` URLs; attachments are collected for download, and the whole message can be exported as `.eml`.
+- renders HTML in a **sandboxed `<iframe>`** (scripts, forms, and same-origin access blocked) with a **Content-Security-Policy that blocks every remote subresource** (images, CSS, fonts), so opening an email can't load remote content such as tracking pixels; inline `cid:` images are rewritten to embedded `data:` URLs and still display. Attachments are collected for download, and the whole message can be exported as `.eml`.
 
 ### Search, filtering, and bookmarks
 
@@ -108,7 +108,8 @@ All processing happens entirely in your browser. No data is sent to any server, 
 
 ## Limitations
 
-- Remote (`http`) images in HTML mail load only if the URLs are still live and you are online; dead URLs — and Thunderbird `<attachment …>` placeholder text left in replies — cannot be recovered, since the image data isn't in the file
+- Remote (`http`) images and other external resources in HTML mail are **blocked** by the render iframe's Content-Security-Policy (so opening an email can't phone home); only inline (`cid:`) images, embedded as `data:` URLs, are shown. Thunderbird `<attachment …>` placeholder text left in replies still can't be recovered, since that data isn't in the file
+- mbox messages are split on postmark lines (`From … <year>`); a body line that looks like a postmark (begins with `From ` and contains a 4-digit year) could still be mis-detected as a boundary
 - Full-text body search re-reads the file each time (bounded memory, shows progress)
 - The one-time index build reads the whole file, so opening a very large archive takes a few seconds
 
