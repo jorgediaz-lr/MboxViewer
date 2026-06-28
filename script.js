@@ -478,7 +478,7 @@ MboxParser.prototype.cleanBase64 = function(data) {
 // Quoted-printable -> raw byte string: drop soft line breaks, turn =XX into a byte.
 MboxParser.prototype.decodeQuotedPrintable = function(content) {
     return content
-        .replace(/=\r?\n/g, '')
+        .replace(/=[ \t]*\r?\n/g, '')
         .replace(/=([0-9A-Fa-f]{2})/g, function(match, hex) {
             return String.fromCharCode(parseInt(hex, 16));
         });
@@ -519,7 +519,7 @@ MboxParser.prototype.estimateDecodedSize = function(data, encoding) {
     }
     if (enc.indexOf('quoted-printable') !== -1) {
         // Each "=XX" is 3 encoded chars -> 1 byte; soft line breaks vanish.
-        var withoutSoft = data.replace(/=\r?\n/g, '');
+        var withoutSoft = data.replace(/=[ \t]*\r?\n/g, '');
         var hex = (withoutSoft.match(/=[0-9A-Fa-f]{2}/g) || []).length;
         return withoutSoft.length - hex * 2;
     }
@@ -1366,7 +1366,10 @@ MboxViewer.prototype.inlineCidImages = function(email) {
 
     var self = this;
     var atts = email.attachments;
-    return html.replace(/cid:([^"'\s>)]+)/gi, function(match, cid) {
+    return html.replace(/cid:<?([^"'\s<>)]+)>?/gi, function(match, cid) {
+        // Tolerate literal angle brackets, e.g. cid:<id>: the optional <...> is
+        // consumed by the regex so the whole reference (incl. a trailing '>') is
+        // replaced, not left behind to corrupt the data: URL.
         var key = cid.toLowerCase();
         for (var i = 0; i < atts.length; i++) {
             if ((atts[i].contentId || '').toLowerCase() === key) {

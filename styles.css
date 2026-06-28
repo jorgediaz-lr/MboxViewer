@@ -15,6 +15,12 @@ body {
     max-width: 1400px;
     margin: 0 auto;
     padding: 20px;
+    /* Fill the viewport and lay out as a column so the two panes can take the
+       remaining height and scroll independently (adapts to the collapsible
+       search panel without a hard-coded offset). */
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
 .topbar {
@@ -211,7 +217,8 @@ body {
     grid-template-columns: 1fr 2fr;
     gap: 20px;
     margin-bottom: 20px;
-    min-height: 600px;
+    flex: 1;          /* take the remaining viewport height */
+    min-height: 0;    /* allow the grid's children to shrink and scroll */
 }
 
 .email-list, .email-viewer {
@@ -222,7 +229,7 @@ body {
 }
 
 .email-list {
-    max-height: 600px;
+    min-height: 0;
     overflow-y: auto;
 }
 
@@ -265,7 +272,10 @@ body {
 
 .email-viewer {
     padding: 0;
-    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .email-header {
@@ -275,6 +285,9 @@ body {
 }
 
 .email-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     padding: 20px;
     white-space: pre-wrap;
     font-family: 'SF Mono', Monaco, monospace;
@@ -422,8 +435,9 @@ body {
 }
 
 .email-html-frame {
+    flex: 1;          /* fill the viewer's remaining height; the iframe scrolls its own content */
     width: 100%;
-    min-height: 500px;
+    min-height: 0;
     border: none;
     background: white;
 }
