@@ -645,6 +645,7 @@ MboxViewer.prototype.initializeElements = function() {
     this.fileInfo = document.getElementById('fileInfo');
     this.emailList = document.getElementById('emailList');
     this.emailViewer = document.getElementById('emailViewer');
+    this.mainContent = document.getElementById('mainContent');
     this.searchInput = document.getElementById('searchInput');
     this.searchBtn = document.getElementById('searchBtn');
     this.clearBtn = document.getElementById('clearBtn');
@@ -780,6 +781,7 @@ MboxViewer.prototype.processFile = function(file) {
     var self = this;
     var token = ++this.loadToken;   // supersede any in-flight index/search
     this.indexReady = false;
+    this.showList();                // mobile: start a new file at the list view
     this.file = file;
     this.viewCache = {};
     this.viewOrder = [];
@@ -1191,6 +1193,7 @@ MboxViewer.prototype.performSearch = function() {
         return;
     }
     if (!this.index) return;
+    this.showList();   // mobile: search results show in the list pane
 
     var self = this;
     if (criteria.text) {
@@ -1241,6 +1244,7 @@ MboxViewer.prototype.clearSearch = function() {
     this.searchInput.value = '';
     this.resetFilterInputs();
     if (!this.index) return;
+    this.showList();   // mobile: back to the list when the search is cleared
     this.filtered = this.index.slice();
     this.renderList();
     this.updateStats();
@@ -1290,6 +1294,7 @@ MboxViewer.prototype.renderEmail = function() {
     }
 
     var headerInfo = '<div class="email-header">' +
+        '<button type="button" class="mobile-back">← Back to list</button>' +
         '<strong>From:</strong> ' + this.escapeHtml(email.from || 'Unknown sender') + '<br>' +
         '<strong>To:</strong> ' + this.escapeHtml(email.to || 'Unknown recipient') + '<br>' +
         '<strong>Subject:</strong> ' + this.escapeHtml(email.subject || '(No subject)') + '<br>' +
@@ -1343,6 +1348,12 @@ MboxViewer.prototype.renderEmail = function() {
         rawToggle.addEventListener('click', function() {
             self.showRawSource = !self.showRawSource;
             self.renderEmail();
+        });
+    }
+    var back = this.emailViewer.querySelector('.mobile-back');
+    if (back) {
+        back.addEventListener('click', function() {
+            self.showList();
         });
     }
 };
@@ -1492,6 +1503,17 @@ MboxViewer.prototype.downloadAttachment = function(attachment) {
 MboxViewer.prototype.selectEmail = function(email, element) {
     this.displayEmail(email);
     this.highlightSelectedEmail(element);
+    this.showEmailView();
+};
+
+// Mobile master-detail: on a phone (<=768px) only one pane shows at a time.
+// These toggle a class the mobile CSS keys off; on wider screens it's inert
+// (both panes are always visible), so desktop/tablet behaviour is unchanged.
+MboxViewer.prototype.showEmailView = function() {
+    if (this.mainContent) this.mainContent.classList.add('show-email');
+};
+MboxViewer.prototype.showList = function() {
+    if (this.mainContent) this.mainContent.classList.remove('show-email');
 };
 
 MboxViewer.prototype.highlightSelectedEmail = function(selectedItem) {

@@ -511,17 +511,52 @@ body {
     background: #0056cc;
 }
 
+/* Back-to-list button: hidden on desktop/tablet, shown only in the mobile
+   single-pane (master-detail) layout below. */
+.mobile-back {
+    display: none;
+    width: 100%;
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    background: #f0f0f0;
+    border: none;
+    border-radius: 8px;
+    color: #007aff;
+    font-size: 0.95rem;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+
+.mobile-back:hover {
+    background: #e5e5e7;
+}
+
 @media (max-width: 768px) {
+    /* Master-detail: show one full-height pane at a time — the list, or the
+       open email (toggled by the .show-email class on .main-content). */
     .main-content {
         grid-template-columns: 1fr;
-        grid-template-rows: 300px minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
     }
-    
+    .email-viewer {
+        display: none;               /* list view by default */
+    }
+    .main-content.show-email .email-list {
+        display: none;               /* email view: hide the list... */
+    }
+    .main-content.show-email .email-viewer {
+        display: flex;               /* ...and show the email full-screen */
+    }
+    .mobile-back {
+        display: block;
+    }
+
     .search-section {
         flex-direction: column;
         gap: 15px;
     }
-    
+
     #searchInput {
         width: 100%;
     }
