@@ -278,9 +278,10 @@ body {
 .email-viewer {
     padding: 0;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    /* The whole pane scrolls — metadata header + attachments + body together —
+       so a long metadata section scrolls with the email instead of being pinned
+       (or clipped when it's taller than the pane). */
+    overflow-y: auto;
 }
 
 .email-header {
@@ -290,9 +291,6 @@ body {
 }
 
 .email-content {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
     padding: 20px;
     white-space: pre-wrap;
     font-family: 'SF Mono', Monaco, monospace;
@@ -440,9 +438,9 @@ body {
 }
 
 .email-html-frame {
-    flex: 1;          /* fill the viewer's remaining height; the iframe scrolls its own content */
+    height: 100%;     /* fill the visible pane; the metadata above scrolls with the
+                         viewer, and the (sandboxed) iframe scrolls its own content */
     width: 100%;
-    min-height: 0;
     border: none;
     background: white;
 }
@@ -548,7 +546,7 @@ body {
         display: none;               /* email view: hide the list... */
     }
     .main-content.show-email .email-viewer {
-        display: flex;               /* ...and show the email full-screen */
+        display: block;              /* ...and show the email full-screen */
     }
     .mobile-back {
         display: block;
