@@ -893,6 +893,7 @@ MboxViewer.prototype.streamMessages = function(file, onMessage, onProgress, onCo
             setTimeout(readNext, 0);
         };
         reader.onerror = function() {
+            if (superseded()) return; // don't surface errors from a cancelled stream
             self.showError('Failed to read the file. Please try again.');
         };
         reader.readAsArrayBuffer(file.slice(fileOffset, end));
@@ -1125,8 +1126,19 @@ MboxViewer.prototype.restoreBookmark = function() {
     }
     if (position === -1) return;
 
-    // Highlight + scroll its row into view if it's already rendered (rows past
-    // the initial 1000 aren't). On phones, stop there — landing on the list with
+    // Make sure the bookmarked row is rendered so it can be highlighted/scrolled
+    // to. Cap the auto-pagination: a bookmark deep in a huge archive must not be
+    // able to force tens of thousands of rows to render on load (the list pages
+    // at 1000); past the cap we just skip the row highlight.
+    var shown = this.emailList.querySelectorAll('.email-item').length;
+    var pages = 0;
+    while (position >= shown && pages < 5 && document.getElementById('loadMoreBtn')) {
+        this.loadMore();
+        shown = this.emailList.querySelectorAll('.email-item').length;
+        pages++;
+    }
+
+    // Highlight + scroll its row into view if it's rendered. On phones, stop there — landing on the list with
     // the last email highlighted, so the user taps to open it (jumping straight
     // into the email view, hiding the list, is jarring). On wider screens, where
     // both panes are visible, re-open it to resume where the user left off.
@@ -1249,6 +1261,8 @@ MboxViewer.prototype.performSearch = function() {
 };
 
 MboxViewer.prototype.clearSearch = function() {
+    this.loadToken++;   // abort any in-flight full-text search so it can't write its
+                        // results back over the cleared list when it finishes
     this.searchInput.value = '';
     this.resetFilterInputs();
     if (!this.index) return;
