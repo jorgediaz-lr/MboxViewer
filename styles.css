@@ -221,7 +221,7 @@ body {
     grid-template-rows: minmax(0, 1fr);  /* pin the row to the pane height (min 0)
                                             so the panes scroll instead of growing */
     gap: 20px;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     flex: 1;          /* take the remaining viewport height */
     min-height: 0;    /* allow the grid's children to shrink and scroll */
 }
@@ -311,11 +311,12 @@ body {
 
 .stats {
     background: white;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+    padding: 6px 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
     text-align: center;
     color: #86868b;
+    font-size: 0.85rem;
 }
 
 .loading {
