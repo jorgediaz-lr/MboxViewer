@@ -34,13 +34,13 @@ body {
     gap: 10px 20px;
     background: white;
     border-radius: 12px;
-    padding: 12px 20px;
-    margin-bottom: 20px;
+    padding: 9px 20px;
+    margin-bottom: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .topbar h1 {
-    font-size: 1.5rem;
+    font-size: 1.25rem;   /* smaller than before, still larger than the 1rem "Search & filters" label */
     color: #1d1d1f;
 }
 
@@ -59,9 +59,10 @@ body {
     display: inline-block;
     background: #007aff;
     color: white;
-    padding: 9px 18px;
+    padding: 7px 16px;
     border-radius: 8px;
     cursor: pointer;
+    font-size: 0.9rem;
     font-weight: 500;
     transition: background-color 0.2s;
 }
