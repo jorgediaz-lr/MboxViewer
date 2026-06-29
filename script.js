@@ -1125,10 +1125,18 @@ MboxViewer.prototype.restoreBookmark = function() {
     }
     if (position === -1) return;
 
-    // Re-open it; highlight + scroll its row into view if it's already rendered
-    // (rows past the initial 1000 aren't, so only the viewer is restored there).
+    // Highlight + scroll its row into view if it's already rendered (rows past
+    // the initial 1000 aren't). On phones, stop there — landing on the list with
+    // the last email highlighted, so the user taps to open it (jumping straight
+    // into the email view, hiding the list, is jarring). On wider screens, where
+    // both panes are visible, re-open it to resume where the user left off.
     var row = this.emailList.querySelector('.email-item[data-index="' + position + '"]');
-    this.openEmail(position, row);
+    var isPhone = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+    if (isPhone) {
+        this.highlightSelectedEmail(row);
+    } else {
+        this.openEmail(position, row);
+    }
     if (row) {
         row.scrollIntoView({ block: 'center' });
     }
