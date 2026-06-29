@@ -1331,7 +1331,9 @@ MboxViewer.prototype.renderEmail = function() {
         // HTML body in a sandboxed iframe (scripts/forms/same-origin blocked)
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
-        frame.setAttribute('sandbox', '');
+        // Locked down except popups: links may open a new tab (see buildFrameDocument),
+        // but scripts, forms, same-origin access and top-navigation stay blocked.
+        frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
         frame.setAttribute('title', 'Email message content');
         frame.srcdoc = this.buildFrameDocument(email);
         this.emailViewer.appendChild(frame);
@@ -1372,7 +1374,12 @@ MboxViewer.prototype.renderEmail = function() {
 // rewritten to data: URLs (which the policy still permits).
 MboxViewer.prototype.buildFrameDocument = function(email) {
     var csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\' data:; font-src data:;">';
-    return csp + this.inlineCidImages(email);
+    // Open links in a new (un-sandboxed) tab. rel=noopener noreferrer keeps the
+    // opened page from reaching back into this window or leaking the referrer.
+    // Injecting the attributes first means they win over any the email set, so a
+    // link can't retarget our app (e.g. target=_top) either.
+    var html = this.inlineCidImages(email).replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ');
+    return csp + html;
 };
 
 // Rewrite cid: references in the HTML body to data: URLs built from the matching
