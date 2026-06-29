@@ -1212,7 +1212,7 @@ MboxViewer.prototype.performSearch = function() {
         this.showError('Enter a search term or set a filter');
         return;
     }
-    if (!this.index) return;
+    if (!this.indexReady) return;   // wait until the index is built (don't abort it)
     this.showList();   // mobile: search results show in the list pane
 
     var self = this;
@@ -1261,11 +1261,11 @@ MboxViewer.prototype.performSearch = function() {
 };
 
 MboxViewer.prototype.clearSearch = function() {
-    this.loadToken++;   // abort any in-flight full-text search so it can't write its
-                        // results back over the cleared list when it finishes
     this.searchInput.value = '';
     this.resetFilterInputs();
-    if (!this.index) return;
+    if (!this.indexReady) return;   // nothing to clear, and must not abort an in-flight index build
+    this.loadToken++;   // abort any in-flight full-text search so it can't write its
+                        // results back over the cleared list when it finishes
     this.showList();   // mobile: back to the list when the search is cleared
     this.filtered = this.index.slice();
     this.renderList();
