@@ -19,7 +19,9 @@ body {
        container grow with content and the panes would expand instead of scroll)
        and lay out as a column so the two panes take the remaining height and
        scroll independently, adapting to the collapsible search panel. */
-    height: 100vh;
+    height: 100vh;    /* fallback for older browsers */
+    height: 100dvh;   /* mobile: track the dynamic viewport so the URL bar can't
+                         push the bottom of the layout off-screen */
     display: flex;
     flex-direction: column;
 }

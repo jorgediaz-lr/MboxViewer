@@ -1087,7 +1087,7 @@ MboxViewer.prototype.openEmail = function(position, element) {
 // reopening the same file resumes where you left off. ---
 
 MboxViewer.prototype.bookmarkKey = function() {
-    return this.file ? ('mboxBookmark:' + this.file.name + ':' + this.file.size) : null;
+    return (this.file && this.file.name) ? ('mboxBookmark:' + this.file.name + ':' + this.file.size) : null;
 };
 
 MboxViewer.prototype.saveBookmark = function(entry) {
