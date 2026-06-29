@@ -438,11 +438,12 @@ body {
 }
 
 .email-html-frame {
-    height: 100%;     /* fill the visible pane; the metadata above scrolls with the
-                         viewer, and the (sandboxed) iframe scrolls its own content */
+    display: block;
     width: 100%;
     border: none;
     background: white;
+    /* height is set in JS to the rendered content height, so the body has no
+       inner scrollbar and the whole pane scrolls as one */
 }
 
 .email-raw {

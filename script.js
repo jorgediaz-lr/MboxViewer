@@ -1345,10 +1345,23 @@ MboxViewer.prototype.renderEmail = function() {
         // HTML body in a sandboxed iframe (scripts/forms/same-origin blocked)
         var frame = document.createElement('iframe');
         frame.className = 'email-html-frame';
-        // Locked down except popups: links may open a new tab (see buildFrameDocument),
-        // but scripts, forms, same-origin access and top-navigation stay blocked.
-        frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+        // Locked down: scripts, forms and top-navigation stay blocked. allow-popups
+        // lets a clicked link open a new tab; allow-same-origin is only so we can
+        // read the rendered height below to size the iframe to its content — no
+        // scripts can run in it (no allow-scripts + CSP), so the shared origin
+        // grants the inert email HTML nothing.
+        frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox allow-same-origin');
         frame.setAttribute('title', 'Email message content');
+        // Size the iframe to its content so the body has no inner scrollbar; the
+        // whole pane (metadata + body) then scrolls as one.
+        frame.addEventListener('load', function() {
+            try {
+                var doc = frame.contentDocument;
+                if (doc && doc.documentElement) {
+                    frame.style.height = doc.documentElement.scrollHeight + 'px';
+                }
+            } catch (e) { /* can't measure — leave the default height */ }
+        });
         frame.srcdoc = this.buildFrameDocument(email);
         this.emailViewer.appendChild(frame);
     } else {
