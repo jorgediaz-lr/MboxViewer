@@ -113,6 +113,8 @@ body {
 
 .search-section.collapsed {
     gap: 0;
+    padding: 8px 16px;     /* slim bar when collapsed; expanded keeps the 20px form padding */
+    margin-bottom: 12px;
 }
 
 .search-section.collapsed .search-body {
