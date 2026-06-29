@@ -1357,9 +1357,15 @@ MboxViewer.prototype.renderEmail = function() {
         frame.addEventListener('load', function() {
             try {
                 var doc = frame.contentDocument;
-                if (doc && doc.documentElement) {
-                    frame.style.height = doc.documentElement.scrollHeight + 'px';
-                }
+                if (!doc || !doc.documentElement) return;
+                // Some emails set html/body { height:100% }, which would peg the
+                // measured height to the iframe's own size and leave a residual
+                // inner scrollbar. Force intrinsic height, then size the iframe to
+                // the content so the body has no inner scroll.
+                var s = doc.createElement('style');
+                s.textContent = 'html,body{height:auto!important;min-height:0!important;}';
+                (doc.head || doc.documentElement).appendChild(s);
+                frame.style.height = doc.documentElement.scrollHeight + 'px';
             } catch (e) { /* can't measure — leave the default height */ }
         });
         frame.srcdoc = this.buildFrameDocument(email);

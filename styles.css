@@ -440,10 +440,11 @@ body {
 .email-html-frame {
     display: block;
     width: 100%;
+    height: 60vh;   /* fallback only — JS overrides with the exact content height so
+                       the body has no inner scrollbar and the whole pane scrolls as
+                       one; this height applies if the height can't be measured */
     border: none;
     background: white;
-    /* height is set in JS to the rendered content height, so the body has no
-       inner scrollbar and the whole pane scrolls as one */
 }
 
 .email-raw {
