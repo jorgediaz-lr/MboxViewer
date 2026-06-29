@@ -65,4 +65,6 @@ All email processing happens entirely in your browser. No data is sent to any se
 
 ## License
 
-This project is open source and available under the MIT License.
+This project is open source and licensed under the **GNU Affero General Public License, Version 3 (AGPLv3)**.
+
+Original components from the first commit are licensed under the **MIT License** by the initial author. See the `LICENSE` file for full copyright notices and license text of both components.
