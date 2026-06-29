@@ -534,7 +534,9 @@ body {
     background: #e5e5e7;
 }
 
-@media (max-width: 768px) {
+/* Narrow screens (portrait phones) OR short screens (phones in landscape, where
+   the width exceeds 768px but there isn't enough height for two panes). */
+@media (max-width: 768px), (max-height: 500px) {
     /* Master-detail: show one full-height pane at a time — the list, or the
        open email (toggled by the .show-email class on .main-content). */
     .main-content {

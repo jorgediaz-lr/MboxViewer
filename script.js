@@ -1143,7 +1143,7 @@ MboxViewer.prototype.restoreBookmark = function() {
     // into the email view, hiding the list, is jarring). On wider screens, where
     // both panes are visible, re-open it to resume where the user left off.
     var row = this.emailList.querySelector('.email-item[data-index="' + position + '"]');
-    var isPhone = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+    var isPhone = window.matchMedia && window.matchMedia('(max-width: 768px), (max-height: 500px)').matches;
     if (isPhone) {
         this.highlightSelectedEmail(row);
     } else {
@@ -1554,7 +1554,8 @@ MboxViewer.prototype.selectEmail = function(email, element) {
     this.showEmailView();
 };
 
-// Mobile master-detail: on a phone (<=768px) only one pane shows at a time.
+// Mobile master-detail: on a phone (narrow <=768px, or short <=500px in
+// landscape) only one pane shows at a time.
 // These toggle a class the mobile CSS keys off; on wider screens it's inert
 // (both panes are always visible), so desktop/tablet behaviour is unchanged.
 MboxViewer.prototype.showEmailView = function() {
